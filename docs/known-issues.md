@@ -56,3 +56,10 @@
 - **现象**：栈溢出时，普通信号 handler 因栈空间耗尽无法执行。需要 `sigaltstack` 分配备用信号栈 + `SA_ONSTACK` 标志。
 - **影响**：crash_demo 的 `stack_overflow` 类型已内置 sigaltstack 设置，handler 在备用栈上执行。实际集成时使用方需自行配置。
 - **注意**：备用栈大小需权衡（太大会浪费内存，太小 handler 无法执行）。推荐使用 `SIGSTKSZ`（POSIX 定义的最小值），本例中为安全起见使用 `SIGSTKSZ`（通常 ≥ 8KB）。
+
+## 9. macOS 默认 malloc 不检测 use-after-free 和 heap buffer overflow
+
+- **现象**：crash_demo 的 `use_after_free` 和 `heap_buf_of` 类型在 macOS 上不触发 crash（exit code 0）。
+- **原因**：macOS 的默认 malloc 实现不做 guard pages 审计，也不对已释放内存做模式填充检测。写入已释放内存或堆越界通常不会立即 crash。
+- **影响**：这两个 crash 类型在 macOS 上无法验证；Linux 上 glibc malloc 在特定条件下可检测（尤其是 double-free），或使用 jemalloc/tcmalloc 的 debug 模式。
+- **缓解**：在 Linux 上验证这两个场景。生产环境中建议使用 jemalloc 或启用 `MallocGuardEdges` / `MallocScribble` 等环境变量来增强 macOS malloc 的检测能力。
