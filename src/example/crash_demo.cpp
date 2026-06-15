@@ -9,7 +9,9 @@
 #include <signal.h>
 #include <stdexcept>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 namespace {
@@ -314,6 +316,77 @@ __attribute__((noinline)) void trigger_sigalrm() {
     ::pause();  // 等待 SIGALRM 到达
 }
 
+// Ctrl+C 中断 → SIGINT
+__attribute__((noinline)) void trigger_sigint() {
+    ::raise(SIGINT);
+}
+
+// 优雅终止 → SIGTERM
+__attribute__((noinline)) void trigger_sigterm() {
+    ::raise(SIGTERM);
+}
+
+// 终端挂起 / 守护进程重载配置 → SIGHUP
+__attribute__((noinline)) void trigger_sighup() {
+    ::raise(SIGHUP);
+}
+
+// CPU 时间超过软限制 → SIGXCPU
+__attribute__((noinline)) void trigger_sigxcpu() {
+    struct rlimit rl;
+    rl.rlim_cur = 1;    // 1 秒 CPU 时间
+    rl.rlim_max = 1;
+    ::setrlimit(RLIMIT_CPU, &rl);
+    // 死循环消耗 CPU 时间，触发 SIGXCPU
+    volatile unsigned long long x = 0;
+    for (;;) { ++x; }
+}
+
+// 文件大小超过软限制 → SIGXFSZ
+// 注意：限制太小（如 1 字节）会导致 handler 本身也无法写日志。
+// 设置为 8KB：足以让 handler 写日志，但仍能触发 SIGXFSZ。
+__attribute__((noinline)) void trigger_sigxfsz() {
+    struct rlimit rl;
+    rl.rlim_cur = 8192;
+    rl.rlim_max = 8192;
+    ::setrlimit(RLIMIT_FSIZE, &rl);
+    // 写入 100KB 数据，超过 8KB 限制 → SIGXFSZ
+    const char* msg = "hello world\n";
+    for (int i = 0; i < 10000; ++i) {
+        (void)::write(STDOUT_FILENO, msg, std::strlen(msg));
+    }
+}
+
+// 虚拟定时器 → SIGVTALRM
+__attribute__((noinline)) void trigger_sigvtalrm() {
+    struct itimerval tv;
+    tv.it_value.tv_sec = 0;
+    tv.it_value.tv_usec = 100000;  // 100ms CPU 时间
+    tv.it_interval.tv_sec = 0;
+    tv.it_interval.tv_usec = 0;
+    ::setitimer(ITIMER_VIRTUAL, &tv, nullptr);
+    volatile unsigned long long x = 0;
+    for (;;) { ++x; }  // 死循环消耗 CPU，确保定时器到期
+}
+
+// Profiling 定时器 → SIGPROF
+__attribute__((noinline)) void trigger_sigprof() {
+    struct itimerval tv;
+    tv.it_value.tv_sec = 0;
+    tv.it_value.tv_usec = 100000;
+    tv.it_interval.tv_sec = 0;
+    tv.it_interval.tv_usec = 0;
+    ::setitimer(ITIMER_PROF, &tv, nullptr);
+    volatile unsigned long long x = 0;
+    for (;;) { ++x; }
+}
+
+// 仿真陷阱 → SIGEMT（仅部分 BSD/老 Unix；Linux/macOS 无此信号）
+// 此处使用 __builtin_trap() 作为近似。实际生产环境极少见。
+__attribute__((noinline)) void trigger_sigemt() {
+    __builtin_trap();  // 近似 SIGEMT；多数平台映射到 SIGTRAP/SIGILL
+}
+
 // ---------- 多层调用封装 ----------
 
 // 在 crash_level_3 → crash_level_2 → crash_level_1 层叠下触发目标信号，
@@ -379,6 +452,14 @@ void print_usage(const char* prog) {
     std::cerr << "    sigquit            quit signal (Ctrl+\\)" << std::endl;
     std::cerr << "    sigpipe            write to broken pipe" << std::endl;
     std::cerr << "    sigalrm            alarm timeout" << std::endl;
+    std::cerr << "    sigint             Ctrl+C interrupt" << std::endl;
+    std::cerr << "    sigterm            graceful termination (kill default)" << std::endl;
+    std::cerr << "    sighup             terminal hangup / daemon reload" << std::endl;
+    std::cerr << "    sigxcpu            CPU time limit exceeded" << std::endl;
+    std::cerr << "    sigxfsz            file size limit exceeded" << std::endl;
+    std::cerr << "    sigvtalrm          virtual timer expired" << std::endl;
+    std::cerr << "    sigprof            profiling timer expired" << std::endl;
+    std::cerr << "    sigemt             emulation trap (BSD, non-POSIX)" << std::endl;
 }
 
 } // namespace
@@ -421,6 +502,14 @@ int main(int argc, char* argv[]) {
             {"sigquit",             trigger_sigquit,             false},
             {"sigpipe",             trigger_sigpipe,             false},
             {"sigalrm",             trigger_sigalrm,             false},
+            {"sigint",              trigger_sigint,              false},
+            {"sigterm",             trigger_sigterm,             false},
+            {"sighup",              trigger_sighup,              false},
+            {"sigxcpu",             trigger_sigxcpu,             false},
+            {"sigxfsz",             trigger_sigxfsz,             false},
+            {"sigvtalrm",           trigger_sigvtalrm,           false},
+            {"sigprof",             trigger_sigprof,             false},
+            {"sigemt",              trigger_sigemt,              false},
         };
 
         bool found = false;
@@ -451,6 +540,16 @@ int main(int argc, char* argv[]) {
         install_handler(SIGQUIT);
         install_handler(SIGPIPE);
         install_handler(SIGALRM);
+        install_handler(SIGINT);
+        install_handler(SIGTERM);
+        install_handler(SIGHUP);
+        install_handler(SIGXCPU);
+        install_handler(SIGXFSZ);
+        install_handler(SIGVTALRM);
+        install_handler(SIGPROF);
+#if defined(SIGEMT)
+        install_handler(SIGEMT);
+#endif
 
         // 配置备用信号栈，仅用于 handler 执行，正常程序不使用。
         if (need_altstack) {

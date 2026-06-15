@@ -31,6 +31,8 @@ CRASH_TYPES = [
     "wild_ptr_write", "null_virtual", "use_after_free",
     "invalid_delete", "terminate", "heap_buf_of", "exec_nx",
     "sigsys", "sigquit", "sigpipe", "sigalrm",
+    "sigint", "sigterm", "sighup",
+    "sigxcpu", "sigxfsz", "sigvtalrm", "sigprof", "sigemt",
 ]
 
 
