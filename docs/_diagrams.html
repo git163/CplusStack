@@ -165,10 +165,10 @@ flowchart TD
     A["print_stacktrace(fd)"]:::entry
     B["1. unw_getcontext(&ctx)<br/>获取当前 CPU 寄存器快照<br/>SP / PC / FP 等"]:::step
     C["2. unw_init_local(&cursor,&ctx)<br/>用寄存器快照<br/>初始化 unwind cursor"]:::step
-    D{ "unw_step(&cursor) > 0 ?"}:::decision
-    E["3a. unw_get_reg(cursor,UNW_REG_IP,&pc)<br/>从当前帧读取返回地址(PC)"]:::step
-    F["3b. unw_get_proc_name(cursor,buf,256,&off)<br/>从 .symtab 读取函数名(mangled)"]:::step
-    G["3c. write(fd,'#N 0x&lt;pc&gt; &lt;name&gt;+&lt;off&gt;\n')<br/>格式化后写入 fd"]:::step
+    D["unw_step(cursor) > 0 ?"]:::decision
+    E["3a. unw_get_reg: 读当前帧的 PC"]:::step
+    F["3b. unw_get_proc_name: 读函数名 (mangled)"]:::step
+    G["3c. write: 格式化写入 #N pc name+off"]:::step
     H["栈顶: 返回"]:::end
     I{ "name_result == 0?"}:::decision
     J["write(fd,'???')"]:::fallback
@@ -275,14 +275,14 @@ flowchart TD
     end
 
     subgraph Linux["Linux: addr2line"]
-      E1["addr2line -e &lt;binary&gt; &lt;pc1&gt; &lt;pc2&gt;..."]:::cmd
-      E2["返回: file:line 对"]:::cmd
+      E1["addr2line -e binary pc1 pc2 ..."]:::cmd
+      E2["返回 file:line 对"]:::cmd
     end
 
     subgraph macOS["macOS: atos"]
-      F1["nm -n &lt;binary&gt; → 符号文件偏移"]:::cmd
-      F2["otool -l | grep vmaddr → 计算出 slide"]:::cmd
-      F3["atos -o &lt;binary&gt; -l &lt;base&gt; &lt;pc&gt;"]:::cmd
+      F1["nm -n binary : 符号文件偏移"]:::cmd
+      F2["otool -l | grep vmaddr : 计算出 slide"]:::cmd
+      F3["atos -o binary -l base pc"]:::cmd
       F4["返回: 函数名 + (file:line)"]:::cmd
     end
 
