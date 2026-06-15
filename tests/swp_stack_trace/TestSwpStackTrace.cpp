@@ -157,6 +157,11 @@ TEST(SwpStackTrace, output_contains_current_function) {
     ASSERT_GT(n, 0);
     const std::string output(buffer, static_cast<std::size_t>(n));
 
+    // 在测试日志中打印捕获到的堆栈，便于观察层级是否被优化。
+    std::cerr << "\n=== captured stack trace in output_contains_current_function ===\n"
+              << output
+              << "=== end of captured stack trace ===" << std::endl;
+
     // mangled 名中必然包含当前测试函数名的子串
     EXPECT_NE(output.find("output_contains_current_function"), std::string::npos)
         << "Stack trace output was:\n" << output;
@@ -216,6 +221,11 @@ TEST(SwpStackTrace, works_from_signal_handler) {
 
     ASSERT_GT(n, 0);
     const std::string output(buffer, static_cast<std::size_t>(n));
+
+    // 在测试日志中打印捕获到的堆栈，便于观察层级是否被优化。
+    std::cerr << "\n=== captured stack trace in works_from_signal_handler ===\n"
+              << output
+              << "=== end of captured stack trace ===" << std::endl;
 
     // mangled 名中必然包含当前测试函数名的子串
     EXPECT_NE(output.find("works_from_signal_handler"), std::string::npos)

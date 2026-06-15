@@ -25,4 +25,4 @@ if [ "$need_build" = true ]; then
 fi
 
 echo "Running unit tests..."
-ctest --test-dir "$BUILD_DIR" --output-on-failure
+ctest --test-dir "$BUILD_DIR" --verbose
