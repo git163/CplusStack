@@ -1,64 +1,85 @@
-# stack
+# swp_stack_trace
 
-<one-line description>
+一个 C++17 异步信号安全的崩溃堆栈打印库，基于 LLVM libunwind。库本身不安装信号处理函数、不吞信号、不分配内存。
 
-## Requirements
+## 依赖
 
 - CMake ≥ 3.20
-- C++17-capable compiler (GCC ≥ 7, Clang ≥ 5, MSVC ≥ 19.14)
-- Optional but recommended: GDB or LLDB for debugging; VSCode + the recommended extensions for the best experience.
+- C++17 编译器（GCC ≥ 7, Clang ≥ 5）
+- LLVM libunwind
 
-## Build
+在 Debian/Ubuntu 上安装 libunwind：
+
+```bash
+sudo apt-get install libunwind-dev
+```
+
+## 构建
 
 ```bash
 cmake -S . -B build
 cmake --build build -j
 ```
 
-Default build type is `RelWithDebInfo` — optimized but keeps debug info, so crashes still produce usable stack traces. For a true release build:
+## 运行示例
 
 ```bash
-cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build build-release -j
+./build/src/example/crash_demo
 ```
 
-## Run
+示例程序会触发崩溃信号，在崩溃前打印调用栈到 stderr。
+
+## 使用方式
+
+```cpp
+#include "swp_stack_trace.h"
+#include <csignal>
+#include <cstdlib>
+
+void my_crash_handler(int sig) {
+    swp_stack_trace::print_stacktrace(STDERR_FILENO);
+
+    // 恢复默认 handler 并重新抛出信号，保留 core dump 行为
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+
+int main() {
+    std::signal(SIGSEGV, my_crash_handler);
+    std::signal(SIGFPE, my_crash_handler);
+    // ...
+}
+```
+
+编译链接：
 
 ```bash
-./build/stack
+g++ your_app.cpp -lswp_stack_trace -lunwind
 ```
 
-## Test
+## 输出格式
+
+```
+#0  0x00005555555551a9  _ZN4Test4funcEi+0x25
+#1  0x00005555555551d8  main+0x18
+```
+
+函数名为 mangled 形式。事后可用 `addr2line` 离线翻译：
+
+```bash
+addr2line -e ./your_binary 0x00005555555551a9
+```
+
+> 注意：现代 Linux 默认开启 PIE，PC 为虚拟地址。对于 PIE 可执行文件或共享库，离线使用 `addr2line` 时需要结合 `/proc/self/maps` 计算模块内偏移。
+
+## 测试
 
 ```bash
 ctest --test-dir build --output-on-failure
 ```
 
-Test files live under `tests/` with the `Test*.cpp` naming pattern — `tests/CMakeLists.txt` auto-discovers them via `gtest_discover_tests`, so adding a new test is just `tests/TestMyModule.cpp`.
+## 注意事项
 
-## Debug
-
-Open the folder in VSCode (`code .`). The project ships launch configurations (`.vscode/launch.json`):
-
-- **(gdb) Launch stack** / **(lldb) Launch stack** — build + debug the main binary. Pick gdb on Linux, lldb on macOS.
-- **(gdb) Run unit_tests** / **(lldb) Run unit_tests** — build + debug the test binary directly. Set breakpoints in any `Test*.cpp` and hit F5.
-
-The pre-launch task is `cmake build`, so the binary is always up-to-date when you start a debug session.
-
-If you don't use VSCode, attach from the command line:
-
-```bash
-gdb --args ./build/stack     # Linux
-lldb ./build/stack           # macOS
-```
-
-## Project layout
-
-- `docs/` — design docs and plans (use `docs/plan-template.md`)
-- `src/` — implementation (`.cpp`)
-- `src/include/` — public headers (Google C++ style)
-- `tests/` — GTest unit tests (`Test*.cpp`)
-
-## Conventions
-
-See `CLAUDE.md` at the project root.
+- 本库不在信号路径中分配内存，但无法保证栈/堆已彻底损坏时 100% 成功。
+- 若需处理栈溢出（stack overflow）导致的 `SIGSEGV`，请提前使用 `sigaltstack` 配置备用信号栈。
+- macOS 上整数除零不会触发 `SIGFPE`，示例程序在 macOS ARM64 上会自动使用 `SIGILL` 演示。
