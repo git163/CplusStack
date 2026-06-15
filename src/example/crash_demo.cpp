@@ -48,8 +48,22 @@ void install_handler(int sig, bool use_altstack = false) noexcept {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = use_altstack ? SA_ONSTACK : 0;
     if (sigaction(sig, &sa, nullptr) != 0) {
-        std::perror("sigaction");
-        std::exit(EXIT_FAILURE);
+        // 注册失败时不退出程序，仅输出警告——演示最小侵入原则。
+        // 实际集成时，建议至少记录日志。
+        const char* msg = "[swp_demo] WARNING: failed to install handler for signal ";
+        ::write(STDERR_FILENO, msg, std::strlen(msg));
+        // 简单输出信号编号（async-safe write）
+        char num_buf[16];
+        int n = sig;
+        int i = 0;
+        do {
+            num_buf[i++] = static_cast<char>('0' + (n % 10));
+            n /= 10;
+        } while (n > 0);
+        while (i > 0) {
+            ::write(STDERR_FILENO, &num_buf[--i], 1);
+        }
+        ::write(STDERR_FILENO, "\n", 1);
     }
 }
 
