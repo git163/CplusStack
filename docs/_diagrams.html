@@ -59,7 +59,7 @@ const defs = {
 entry: 'fill:#7aa2f7,stroke:#4a6ab8,color:#1a1b26',
 step: 'fill:#9ece6a,stroke:#5a823c,color:#1a1b26',
 decision: 'fill:#e0af68,stroke:#bb7a1a,color:#1a1b26',
-end: 'fill:#9aa5ce,stroke:#6a7ab0,color:#1a1b26',
+done: 'fill:#9aa5ce,stroke:#6a7ab0,color:#1a1b26',
 fallback: 'fill:#565f89,stroke:#414868,color:#c0caf5',
 hw: 'fill:#bb9af7,stroke:#7a6ae6,color:#1a1b26',
 kernel: 'fill:#e0af68,stroke:#bb7a1a,color:#1a1b26',
@@ -123,7 +123,7 @@ d3: `flowchart TD
   E[Step 3a: unw_get_reg<br/>read PC from frame]:::step
   F[Step 3b: unw_get_proc_name<br/>read mangled name]:::step
   G[Step 3c: write<br/>output to fd]:::step
-  H[done - return]:::end
+  H[done - return]:::done
   I{name resolved?}:::decision
   J[write ??? fallback]:::fallback
   A-->B-->C-->D
@@ -187,7 +187,7 @@ d6: `flowchart TD
     F4[returns name and file:line]:::cmd
   end
   G[merge: original line<br/>plus file:line suffix]:::step
-  H[final output: stack trace<br/>with source locations]:::end
+  H[final output: stack trace<br/>with source locations]:::done
   A-->B-->C-->D
   D-->|Linux|E1-->E2-->G
   D-->|macOS|F1-->F2-->F3-->F4-->G
