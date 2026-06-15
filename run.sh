@@ -24,7 +24,8 @@ if [ "$need_build" = true ]; then
     echo "Build finished"
 fi
 
-echo "Running crash_demo (it will crash intentionally)..."
+CRASH_TYPE="${1:-sigsegv}"
+echo "Running crash_demo with crash type: $CRASH_TYPE (it will crash intentionally)..."
 "$DEMO_BIN" "$@"
 exit_code=$?
 
