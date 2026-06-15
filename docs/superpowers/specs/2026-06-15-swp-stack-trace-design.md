@@ -130,13 +130,13 @@ addr2line -e ./your_binary 0x00005555555551a9
 
 ## 实施步骤
 
-- [ ] 创建 `src/include/swp_stack_trace.h` 公共头文件。
-- [ ] 创建 `src/swp_stack_trace.cpp`，基于 LLVM libunwind 实现 `print_stacktrace`。
-- [ ] 修改 `CMakeLists.txt`：构建静态库 `libswp_stack_trace.a`、链接 libunwind、构建示例程序 `crash_demo`。
-- [ ] 将 `src/main.cpp` 迁移为 `src/example/crash_demo.cpp`，演示 signal handler + 重新 raise + 打印堆栈。
-- [ ] 创建 `tests/swp_stack_trace/TestSwpStackTrace.cpp`，用子进程触发信号并验证输出。
-- [ ] 更新 `README.md` 为库的使用说明、构建方式和注意事项。
-- [ ] 将设计文档状态更新为“已批准”。
+- [x] 创建 `src/include/swp_stack_trace.h` 公共头文件。
+- [x] 创建 `src/swp_stack_trace.cpp`，基于 LLVM libunwind 实现 `print_stacktrace`。
+- [x] 修改 `CMakeLists.txt`：构建静态库 `libswp_stack_trace.a`、链接 libunwind、构建示例程序 `crash_demo`。
+- [x] 将 `src/main.cpp` 迁移为 `src/example/crash_demo.cpp`，演示 signal handler + 重新 raise + 打印堆栈。
+- [x] 创建 `tests/swp_stack_trace/TestSwpStackTrace.cpp`，验证 print_stacktrace 输出及信号 handler 中的行为。
+- [x] 更新 `README.md` 为库的使用说明、构建方式和注意事项。
+- [x] 将设计文档状态更新为“已批准”。
 
 ## 测试计划
 

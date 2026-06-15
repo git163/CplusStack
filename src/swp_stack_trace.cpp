@@ -117,7 +117,7 @@ void print_stacktrace(int fd) noexcept {
 
         if (name_result == 0 && name_buffer[0] != '\0') {
             write_string(fd, name_buffer);
-            write_string(fd, "+0x");
+            write_string(fd, "+");
             write_hex(fd, static_cast<std::uintptr_t>(offset));
         } else {
             write_string(fd, "???");
