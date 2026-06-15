@@ -22,7 +22,11 @@ include(GoogleTest)
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS "Test*.cpp")
 
 add_executable(unit_tests ${TEST_SOURCES})
-target_link_libraries(unit_tests PRIVATE GTest::gtest GTest::gtest_main)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(unit_tests PRIVATE GTest::gtest GTest::gtest_main swp_stack_trace unwind)
+else()
+    target_link_libraries(unit_tests PRIVATE GTest::gtest GTest::gtest_main swp_stack_trace)
+endif()
 target_include_directories(unit_tests PRIVATE ../src/include)
 
 # 让每个 TEST() 自动注册为 CTest 用例
