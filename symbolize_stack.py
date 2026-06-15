@@ -3,18 +3,20 @@
 离线解析 swp_stack_trace 打印的原始堆栈。
 
 用法：
-    # 从标准输入读取
-    ./run.sh 2>&1 | ./symbolize_stack.py ./build/src/example/crash_demo
-    ./run_tests.sh 2>&1 | ./symbolize_stack.py ./build/tests/unit_tests
+    # 默认：解析 /tmp/swp_crash.log，二进制为 ./build/src/example/crash_demo
+    ./symbolize_stack.py
 
-    # 从崩溃日志文件读取
+    # 从标准输入读取（需指定二进制路径）
+    ./run.sh 2>&1 | ./symbolize_stack.py ./build/src/example/crash_demo
+
+    # 显式指定二进制路径和日志文件
     ./symbolize_stack.py ./build/src/example/crash_demo /tmp/swp_crash.log
 
+默认值可在脚本底部 DEFAULT_BINARY 和 DEFAULT_LOG 修改。
+
 说明：
-- 本工具读取标准输入或文件中的堆栈文本，提取 PC 地址。
 - Linux：调用 addr2line / llvm-addr2line 将 PC 翻译成 file:line。
-- macOS：调用 atos；自动根据堆栈中的符号地址和 nm/otool 计算 ASLR slide/load base。
-- 将翻译结果追加到原始行末尾。
+- macOS：调用 atos；自动根据堆栈中的符号地址和 nm/otool 计算 ASLR slide。
 """
 
 import platform
@@ -224,13 +226,30 @@ def combine(entries, locations):
 
 
 def main():
-    if len(sys.argv) < 2 or len(sys.argv) > 3:
-        print(f"Usage: {sys.argv[0]} <binary> [<log_file>]", file=sys.stderr)
-        print("Example: ./run.sh 2>&1 | ./symbolize_stack.py ./build/src/example/crash_demo", file=sys.stderr)
-        print("Example: ./symbolize_stack.py ./build/src/example/crash_demo /tmp/swp_crash.log", file=sys.stderr)
+    DEFAULT_BINARY = "./build/src/example/crash_demo"
+    DEFAULT_LOG = "/tmp/swp_crash.log"
+
+    if len(sys.argv) > 3:
+        print(f"Usage: {sys.argv[0]} [<binary> [<log_file>]]", file=sys.stderr)
+        print("Examples:", file=sys.stderr)
+        print("  ./symbolize_stack.py", file=sys.stderr)
+        print("  ./run.sh 2>&1 | ./symbolize_stack.py ./build/src/example/crash_demo", file=sys.stderr)
+        print("  ./symbolize_stack.py ./build/src/example/crash_demo /tmp/swp_crash.log", file=sys.stderr)
         sys.exit(1)
 
-    binary = sys.argv[1]
+    # 无参数时使用默认二进制路径和日志路径
+    if len(sys.argv) == 1:
+        binary = DEFAULT_BINARY
+        log_path = DEFAULT_LOG
+    elif len(sys.argv) == 2:
+        # 单个参数：二进制路径，从标准输入读取
+        binary = sys.argv[1]
+        log_path = None
+    else:
+        # 两个参数：二进制路径 + 日志文件
+        binary = sys.argv[1]
+        log_path = sys.argv[2]
+
     tool_type, tool_path = find_tool()
     if not tool_path:
         print(
@@ -241,8 +260,7 @@ def main():
         )
         sys.exit(1)
 
-    if len(sys.argv) >= 3:
-        log_path = sys.argv[2]
+    if log_path:
         try:
             with open(log_path, "r") as f:
                 lines = f.readlines()
