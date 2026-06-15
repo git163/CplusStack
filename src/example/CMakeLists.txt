@@ -1,0 +1,2 @@
+add_executable(crash_demo crash_demo.cpp)
+target_link_libraries(crash_demo PRIVATE swp_stack_trace)
