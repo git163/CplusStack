@@ -5,6 +5,8 @@
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <signal.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 namespace {
@@ -38,11 +40,11 @@ void crash_signal_handler(int sig) noexcept {
     }
 }
 
-void install_handler(int sig) noexcept {
+void install_handler(int sig, bool use_altstack = false) noexcept {
     struct sigaction sa;
     sa.sa_handler = crash_signal_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
+    sa.sa_flags = use_altstack ? SA_ONSTACK : 0;
     if (sigaction(sig, &sa, nullptr) != 0) {
         std::perror("sigaction");
         std::exit(EXIT_FAILURE);
@@ -57,8 +59,7 @@ __attribute__((noinline)) void trigger_sigfpe() {
     unsigned long dummy = 1;
     asm volatile("xor %%rax, %%rax; div %0" : : "r"(dummy) : "rax", "rdx");
 #elif defined(__arm64__) || defined(__aarch64__)
-    // ARM64 上整数除零不触发 SIGFPE，使用 __builtin_trap() 代替，
-    // 它会触发 SIGTRAP。安装 handler 时也注册了 SIGTRAP，因此能被捕获。
+    // ARM64 上整数除零不触发 SIGFPE，使用 __builtin_trap() fallback。
     __builtin_trap();
 #else
     volatile int a = 1;
@@ -93,31 +94,91 @@ __attribute__((noinline)) void trigger_sigabrt() {
     std::abort();
 }
 
-// 总线错误 → SIGBUS（非对齐访问 / mmap 的边界）
+// 总线错误 → SIGBUS
 __attribute__((noinline)) void trigger_sigbus() {
 #if defined(__x86_64__)
-    // x86-64 默认允许非对齐访问，尝试 mmap 边界触发 SIGBUS
+    // mmap 一页后 mprotect 为 PROT_NONE，写入末端触发 SIGBUS
     long page_size = ::sysconf(_SC_PAGESIZE);
     void* p = ::mmap(nullptr, static_cast<std::size_t>(page_size),
                      PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
         std::abort();
     }
-    // 将最后一页保护为只读，写入时触发 SIGBUS
     ::mprotect(p, static_cast<std::size_t>(page_size), PROT_NONE);
     auto* cp = static_cast<char*>(p);
     cp[page_size - 1] = 'x';  // NOLINT
     ::munmap(p, static_cast<std::size_t>(page_size));
 #else
-    // ARM64 上非对齐访问更严格，可尝试偶数地址上做不对齐的原子操作
+    // ARM64 上非对齐访问更敏感，使用奇数地址大概率触发 SIGBUS
     volatile int* up = reinterpret_cast<volatile int*>(0x1);
-    *up = 42;  // NOLINT — 大概率 SIGBUS
+    *up = 42;  // NOLINT
 #endif
 }
 
 // 断点陷阱 → SIGTRAP
 __attribute__((noinline)) void trigger_sigtrap() {
     __builtin_trap();
+}
+
+// ---------- 工业生产级崩溃场景 ----------
+
+// 栈溢出：无限递归耗尽栈空间 → SIGSEGV
+// 需要 sigaltstack 分配备用信号栈，否则 handler 本身因栈耗尽无法执行。
+__attribute__((noinline)) void trigger_stack_overflow() {
+    volatile char buf[1024];  // NOLINT — 每次递归在栈上分配 1KB，快速耗尽栈
+    buf[0] = 'x';
+    trigger_stack_overflow();
+}
+
+// 重复释放：同一指针 free 两次 → SIGABRT（需 glibc/jemalloc 检测）
+__attribute__((noinline)) void trigger_double_free() {
+    void* p = ::malloc(64);
+    if (p == nullptr) {
+        std::abort();
+    }
+    ::free(p);
+    ::free(p);  // NOLINT — double free，allocator 检测后 abort()
+}
+
+// 纯虚函数调用：在构造函数/析构函数中调用纯虚函数 → SIGABRT
+// 工业场景中常见于多态对象生命周期管理不当。
+namespace {
+class pure_virtual_base {
+public:
+    pure_virtual_base() {
+        // 构造期间 vtable 尚未指向派生类 → 调用纯虚函数 → __cxa_pure_virtual / abort
+        pure_virtual_call();
+    }
+    virtual void pure_virtual_call() = 0;
+    virtual ~pure_virtual_base() = default;
+};
+
+class pure_virtual_derived : public pure_virtual_base {
+public:
+    void pure_virtual_call() override {}
+};
+}  // namespace
+
+__attribute__((noinline)) void trigger_pure_virtual() {
+    pure_virtual_derived obj;
+    (void)obj;
+}
+
+// 只读内存写入：向 .rodata 段写入 → SIGSEGV
+__attribute__((noinline)) void trigger_write_rodata() {
+    // 字符串字面量位于 .rodata（只读数据段），写入触发 SIGSEGV
+    char* s = const_cast<char*>("immutable string");  // NOLINT
+    s[0] = 'X';  // NOLINT
+}
+
+// 栈缓冲区溢出：溢出触发栈 canary → SIGABRT（__stack_chk_fail）
+// 需要 -fstack-protector-strong 编译选项。
+__attribute__((noinline)) void trigger_stack_buf_overflow() {
+    char buf[16];
+    // 写入远超 buf 大小，覆盖栈上的 canary → __stack_chk_fail → SIGABRT
+    for (int i = 0; i < 4096; ++i) {
+        buf[i] = 'A';  // NOLINT
+    }
 }
 
 // ---------- 多层调用封装 ----------
@@ -163,12 +224,17 @@ __attribute__((noinline)) void deep_call_4() {
 void print_usage(const char* prog) {
     std::cerr << "Usage: " << prog << " <crash_type>" << std::endl;
     std::cerr << "  crash types:" << std::endl;
-    std::cerr << "    sigfpe    division by zero" << std::endl;
-    std::cerr << "    sigsegv   null pointer dereference" << std::endl;
-    std::cerr << "    sigill    illegal instruction" << std::endl;
-    std::cerr << "    sigabrt   abort()" << std::endl;
-    std::cerr << "    sigbus    bus error" << std::endl;
-    std::cerr << "    sigtrap   breakpoint trap" << std::endl;
+    std::cerr << "    sigfpe          division by zero" << std::endl;
+    std::cerr << "    sigsegv         null pointer dereference" << std::endl;
+    std::cerr << "    sigill          illegal instruction" << std::endl;
+    std::cerr << "    sigabrt         abort()" << std::endl;
+    std::cerr << "    sigbus          bus error (mmap boundary / misaligned)" << std::endl;
+    std::cerr << "    sigtrap         breakpoint trap" << std::endl;
+    std::cerr << "    stack_overflow  infinite recursion (stack exhaustion)" << std::endl;
+    std::cerr << "    double_free     double free (heap corruption)" << std::endl;
+    std::cerr << "    pure_virtual    pure virtual call in ctor" << std::endl;
+    std::cerr << "    write_rodata    write to read-only .rodata" << std::endl;
+    std::cerr << "    stack_buf_of    stack buffer overflow (canary fail)" << std::endl;
 }
 
 } // namespace
@@ -195,19 +261,44 @@ int main(int argc, char* argv[]) {
             g_trigger_fn = trigger_sigbus;
         } else if (std::strcmp(crash_type, "sigtrap") == 0) {
             g_trigger_fn = trigger_sigtrap;
+        } else if (std::strcmp(crash_type, "stack_overflow") == 0) {
+            g_trigger_fn = trigger_stack_overflow;
+        } else if (std::strcmp(crash_type, "double_free") == 0) {
+            g_trigger_fn = trigger_double_free;
+        } else if (std::strcmp(crash_type, "pure_virtual") == 0) {
+            g_trigger_fn = trigger_pure_virtual;
+        } else if (std::strcmp(crash_type, "write_rodata") == 0) {
+            g_trigger_fn = trigger_write_rodata;
+        } else if (std::strcmp(crash_type, "stack_buf_of") == 0) {
+            g_trigger_fn = trigger_stack_buf_overflow;
         } else {
             std::cerr << "Unknown crash type: " << crash_type << std::endl;
             print_usage(argv[0]);
             return EXIT_FAILURE;
         }
 
-        // 安装全部信号 handler
+        // 安装全部信号 handler。
+        // 栈溢出场景需要 SA_ONSTACK + sigaltstack，否则 handler 无法执行。
+        bool need_altstack = (std::strcmp(crash_type, "stack_overflow") == 0);
         install_handler(SIGFPE);
-        install_handler(SIGSEGV);
+        install_handler(SIGSEGV, need_altstack);
         install_handler(SIGILL);
         install_handler(SIGABRT);
         install_handler(SIGBUS);
         install_handler(SIGTRAP);
+
+        // 配置备用信号栈，仅用于 handler 执行，正常程序不使用。
+        if (need_altstack) {
+            static char alt_stack[SIGSTKSZ];
+            stack_t ss;
+            ss.ss_sp = alt_stack;
+            ss.ss_size = sizeof(alt_stack);
+            ss.ss_flags = 0;
+            if (sigaltstack(&ss, nullptr) != 0) {
+                std::perror("sigaltstack");
+                return EXIT_FAILURE;
+            }
+        }
 
         // 先打印一次正常深度调用栈
         std::cerr << "Printing stack trace from a deep call stack..." << std::endl;

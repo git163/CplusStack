@@ -42,3 +42,17 @@
 - **原因**：libunwind 依赖栈上的 unwind 表（`.eh_frame`）和寄存器上下文，两者在栈损坏时会失效。
 - **影响**：这是所有堆栈回溯工具的共性限制，不是 swp_stack_trace 的特有缺陷。
 - **缓解**：此时应依赖 core dump 文件进行事后分析。`print_stacktrace` 在 handler 中尽早调用，可最大程度保留原始崩溃现场。
+
+## 7. macOS 上 `__stack_chk_fail` 不触发信号 handler
+
+- **现象**：macOS 上触发栈缓冲区溢出（`stack_buf_of`）时，`__stack_chk_fail` 被调用，但 SIGABRT handler 未被执行。进程直接以 exit code 134（SIGABRT）终止。
+- **原因**：macOS 的 `__stack_chk_fail` 实现直接调用 `__abort()` 或 `_exit()`，绕过了正常的 `abort()` → `raise(SIGABRT)` 路径，因此已安装的 SIGABRT handler 不会触发。
+- **影响**：`stack_buf_of` 类型在 macOS 上无法通过 handler 捕获堆栈；Linux 上 `__stack_chk_fail` → `abort()` → handler 正常工作。
+- **平台**：仅 macOS。
+- **缓解**：在 Linux 上验证栈缓冲区溢出场景。macOS 上可通过 crash_demo 正常堆栈打印（deep_call）间接验证该场景的调用链。
+
+## 8. 栈溢出需要 sigaltstack 且回调函数要尽量轻量
+
+- **现象**：栈溢出时，普通信号 handler 因栈空间耗尽无法执行。需要 `sigaltstack` 分配备用信号栈 + `SA_ONSTACK` 标志。
+- **影响**：crash_demo 的 `stack_overflow` 类型已内置 sigaltstack 设置，handler 在备用栈上执行。实际集成时使用方需自行配置。
+- **注意**：备用栈大小需权衡（太大会浪费内存，太小 handler 无法执行）。推荐使用 `SIGSTKSZ`（POSIX 定义的最小值），本例中为安全起见使用 `SIGSTKSZ`（通常 ≥ 8KB）。

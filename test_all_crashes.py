@@ -19,7 +19,11 @@ DEFAULT_BINARY = "./build/src/example/crash_demo"
 CRASH_LOG = "/tmp/swp_crash.log"
 SYMBOLIZE_SCRIPT = "./symbolize_stack.py"
 
-CRASH_TYPES = ["sigfpe", "sigsegv", "sigill", "sigabrt", "sigbus", "sigtrap"]
+CRASH_TYPES = [
+    "sigfpe", "sigsegv", "sigill", "sigabrt", "sigbus", "sigtrap",
+    "stack_overflow", "double_free", "pure_virtual",
+    "write_rodata", "stack_buf_of",
+]
 
 
 def run_one(binary: str, crash_type: str) -> bool:
