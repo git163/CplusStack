@@ -5,9 +5,9 @@
 用法：
     ./test_all_crashes.py
     ./test_all_crashes.py ./build/src/example/crash_demo
+    ./test_all_crashes.py ./build/src/example/crash_demo --no-build
 
-默认二进制路径为 ./build/src/example/crash_demo，
-日志路径为 /tmp/swp_crash.log（与 crash_demo 硬编码路径一致）。
+默认先执行编译，可通过 --no-build 跳过。
 """
 
 import os
@@ -16,8 +16,11 @@ import sys
 
 # 可在此处修改默认值
 DEFAULT_BINARY = "./build/src/example/crash_demo"
+DEFAULT_BUILD_DIR = "./build"
 CRASH_LOG = "/tmp/swp_crash.log"
 SYMBOLIZE_SCRIPT = "./symbolize_stack.py"
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 CRASH_TYPES = [
     "sigfpe", "sigsegv", "sigill", "sigabrt", "sigbus", "sigtrap",
@@ -28,9 +31,33 @@ CRASH_TYPES = [
 ]
 
 
+def build_demo(binary: str) -> bool:
+    """编译 crash_demo。"""
+    build_dir = os.path.join(SCRIPT_DIR, DEFAULT_BUILD_DIR)
+    print("Building crash_demo...")
+    # 配置（若 build 目录尚不存在）
+    if not os.path.isdir(build_dir):
+        result = subprocess.run(
+            ["cmake", "-S", SCRIPT_DIR, "-B", build_dir, "-DBUILD_TESTING=OFF"],
+            capture_output=False,
+        )
+        if result.returncode != 0:
+            print("cmake configure failed", file=sys.stderr)
+            return False
+    # 编译
+    result = subprocess.run(
+        ["cmake", "--build", build_dir, "--target", "crash_demo", "-j"],
+        capture_output=False,
+    )
+    if result.returncode != 0:
+        print("Build failed", file=sys.stderr)
+        return False
+    print("Build finished\n")
+    return True
+
+
 def run_one(binary: str, crash_type: str) -> bool:
     """运行一次 crash_demo，返回是否成功触发（非 0 退出码即成功）。"""
-    # 清空上一次的日志
     try:
         os.remove(CRASH_LOG)
     except OSError:
@@ -41,7 +68,6 @@ def run_one(binary: str, crash_type: str) -> bool:
         capture_output=True,
         text=True,
     )
-    # 非 0 退出码 = 成功触发信号
     return result.returncode != 0
 
 
@@ -60,14 +86,24 @@ def symbolize_one(binary: str) -> str:
 
 def main():
     binary = DEFAULT_BINARY
-    if len(sys.argv) > 1:
-        binary = sys.argv[1]
+    skip_build = False
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if "--no-build" in sys.argv:
+        skip_build = True
+    if args:
+        binary = args[0]
+
+    if not os.path.isfile(SYMBOLIZE_SCRIPT):
+        print(f"Error: {SYMBOLIZE_SCRIPT} not found", file=sys.stderr)
+        sys.exit(1)
+
+    # 先编译
+    if not skip_build:
+        if not build_demo(binary):
+            sys.exit(1)
 
     if not os.path.isfile(binary):
         print(f"Error: binary not found: {binary}", file=sys.stderr)
-        sys.exit(1)
-    if not os.path.isfile(SYMBOLIZE_SCRIPT):
-        print(f"Error: {SYMBOLIZE_SCRIPT} not found", file=sys.stderr)
         sys.exit(1)
 
     print(f"Running all crash types against: {binary}")
