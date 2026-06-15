@@ -3,11 +3,15 @@
 离线解析 swp_stack_trace 打印的原始堆栈。
 
 用法：
+    # 从标准输入读取
     ./run.sh 2>&1 | ./symbolize_stack.py ./build/src/example/crash_demo
     ./run_tests.sh 2>&1 | ./symbolize_stack.py ./build/tests/unit_tests
 
+    # 从崩溃日志文件读取
+    ./symbolize_stack.py ./build/src/example/crash_demo /tmp/swp_crash.log
+
 说明：
-- 本工具读取标准输入中的堆栈文本，提取 PC 地址。
+- 本工具读取标准输入或文件中的堆栈文本，提取 PC 地址。
 - Linux：调用 addr2line / llvm-addr2line 将 PC 翻译成 file:line。
 - macOS：调用 atos；自动根据堆栈中的符号地址和 nm/otool 计算 ASLR slide/load base。
 - 将翻译结果追加到原始行末尾。
@@ -220,9 +224,10 @@ def combine(entries, locations):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <binary>", file=sys.stderr)
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print(f"Usage: {sys.argv[0]} <binary> [<log_file>]", file=sys.stderr)
         print("Example: ./run.sh 2>&1 | ./symbolize_stack.py ./build/src/example/crash_demo", file=sys.stderr)
+        print("Example: ./symbolize_stack.py ./build/src/example/crash_demo /tmp/swp_crash.log", file=sys.stderr)
         sys.exit(1)
 
     binary = sys.argv[1]
@@ -236,7 +241,16 @@ def main():
         )
         sys.exit(1)
 
-    lines = sys.stdin.readlines()
+    if len(sys.argv) >= 3:
+        log_path = sys.argv[2]
+        try:
+            with open(log_path, "r") as f:
+                lines = f.readlines()
+        except OSError as e:
+            print(f"Error: cannot read '{log_path}': {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        lines = sys.stdin.readlines()
     entries, pcs = parse_input(lines)
 
     if not pcs:

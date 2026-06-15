@@ -2,17 +2,30 @@
 
 #include <csignal>
 #include <cstdlib>
+#include <fcntl.h>
 #include <iostream>
 #include <unistd.h>
 
 namespace {
 
-// 崩溃信号 handler：先打印堆栈，再恢复默认 handler 并重新抛出信号，
+// 崩溃日志文件路径。
+constexpr const char* k_crash_log_path = "/tmp/swp_crash.log";
+
+// 崩溃信号 handler：将堆栈写入文件并输出到 stderr，再恢复默认 handler 并重新抛出信号，
 // 以保留原有 core dump 行为。
 // 注意：print_stacktrace 设计为 async-signal-safe（仅使用 write() 与 libunwind，
 // 不调用 malloc/printf 等不可重入函数），因此可在信号 handler 中安全调用。
 void crash_signal_handler(int sig) noexcept {
+    // 同时输出到 stderr，便于直接在终端观察。
     swp_stack_trace::print_stacktrace(STDERR_FILENO);
+
+    // 将堆栈追加写入崩溃日志文件，便于事后离线解析。
+    // open / write / close 均在 POSIX async-signal-safe 列表中。
+    int log_fd = ::open(k_crash_log_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (log_fd >= 0) {
+        swp_stack_trace::print_stacktrace(log_fd);
+        ::close(log_fd);
+    }
 
     struct sigaction sa;
     sa.sa_handler = SIG_DFL;
