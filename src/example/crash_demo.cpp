@@ -73,6 +73,43 @@ void trigger_sigill() {
 #endif
 }
 
+// 通过多层嵌套调用触发崩溃，让崩溃前的调用栈更深。
+__attribute__((noinline)) int call_level_1() {
+#if defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__))
+    trigger_sigill();
+#else
+    trigger_division_by_zero();
+#endif
+    return 1;
+}
+
+__attribute__((noinline)) int call_level_2() {
+    return call_level_1() + 1;
+}
+
+__attribute__((noinline)) int call_level_3() {
+    return call_level_2() + 1;
+}
+
+// 通过多层嵌套调用打印堆栈，展示普通调用链下的输出效果。
+__attribute__((noinline)) int deep_call_1() {
+    std::cerr << "\nStack trace from deep_call_1:" << std::endl;
+    swp_stack_trace::print_stacktrace(STDERR_FILENO);
+    return 1;
+}
+
+__attribute__((noinline)) int deep_call_2() {
+    return deep_call_1() + 1;
+}
+
+__attribute__((noinline)) int deep_call_3() {
+    return deep_call_2() + 1;
+}
+
+__attribute__((noinline)) int deep_call_4() {
+    return deep_call_3() + 1;
+}
+
 } // namespace
 
 int main() {
@@ -81,14 +118,13 @@ int main() {
         install_handler(SIGSEGV);
         install_handler(SIGILL);
 
-        std::cerr << "About to crash..." << std::endl;
+        std::cerr << "Printing stack trace from a deep call stack..." << std::endl;
+        (void)deep_call_4();
+
+        std::cerr << "\nAbout to crash..." << std::endl;
 
         // 在 macOS ARM64 上整数除零不会触发 SIGFPE，因此使用 SIGILL 验证。
-#if defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__))
-        trigger_sigill();
-#else
-        trigger_division_by_zero();
-#endif
+        (void)call_level_3();
     } catch (const std::exception& e) {
         std::cerr << "unexpected exception: " << e.what() << std::endl;
         return EXIT_FAILURE;
