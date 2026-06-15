@@ -3,14 +3,16 @@
 遍历所有 crash_demo 用例并离线解析堆栈。
 
 用法：
-    ./test_all_crashes.py
-    ./test_all_crashes.py ./build/src/example/crash_demo
+    ./test_all_crashes.py                           # 清空编译 → 测试全部
+    ./test_all_crashes.py --no-clean                 # 不清空，增量编译
+    ./test_all_crashes.py --no-build                 # 跳过编译（已有二进制时）
     ./test_all_crashes.py ./build/src/example/crash_demo --no-build
 
-默认先执行编译，可通过 --no-build 跳过。
+默认行为：先删除 build 目录，重新 cmake 配置编译，再跑全部 18 种测试。
 """
 
 import os
+import shutil
 import subprocess
 import sys
 
@@ -31,20 +33,21 @@ CRASH_TYPES = [
 ]
 
 
-def build_demo(binary: str) -> bool:
-    """编译 crash_demo。"""
+def build_demo(clean: bool) -> bool:
+    """编译 crash_demo。clean=True 时先删除 build 目录。"""
     build_dir = os.path.join(SCRIPT_DIR, DEFAULT_BUILD_DIR)
+    if clean and os.path.isdir(build_dir):
+        print("Cleaning build directory...")
+        shutil.rmtree(build_dir)
+
     print("Building crash_demo...")
-    # 配置（若 build 目录尚不存在）
-    if not os.path.isdir(build_dir):
-        result = subprocess.run(
-            ["cmake", "-S", SCRIPT_DIR, "-B", build_dir, "-DBUILD_TESTING=OFF"],
-            capture_output=False,
-        )
-        if result.returncode != 0:
-            print("cmake configure failed", file=sys.stderr)
-            return False
-    # 编译
+    result = subprocess.run(
+        ["cmake", "-S", SCRIPT_DIR, "-B", build_dir, "-DBUILD_TESTING=OFF"],
+        capture_output=False,
+    )
+    if result.returncode != 0:
+        print("cmake configure failed", file=sys.stderr)
+        return False
     result = subprocess.run(
         ["cmake", "--build", build_dir, "--target", "crash_demo", "-j"],
         capture_output=False,
@@ -86,10 +89,9 @@ def symbolize_one(binary: str) -> str:
 
 def main():
     binary = DEFAULT_BINARY
-    skip_build = False
+    skip_build = "--no-build" in sys.argv
+    skip_clean = "--no-clean" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    if "--no-build" in sys.argv:
-        skip_build = True
     if args:
         binary = args[0]
 
@@ -97,9 +99,8 @@ def main():
         print(f"Error: {SYMBOLIZE_SCRIPT} not found", file=sys.stderr)
         sys.exit(1)
 
-    # 先编译
     if not skip_build:
-        if not build_demo(binary):
+        if not build_demo(clean=not skip_clean):
             sys.exit(1)
 
     if not os.path.isfile(binary):
