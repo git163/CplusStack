@@ -23,6 +23,8 @@ CRASH_TYPES = [
     "sigfpe", "sigsegv", "sigill", "sigabrt", "sigbus", "sigtrap",
     "stack_overflow", "double_free", "pure_virtual",
     "write_rodata", "stack_buf_of",
+    "wild_ptr_write", "null_virtual", "use_after_free",
+    "invalid_delete", "terminate", "heap_buf_of", "exec_nx",
 ]
 
 

@@ -1,11 +1,13 @@
 #include "swp_stack_trace.h"
 
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
 #include <signal.h>
+#include <stdexcept>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -172,13 +174,102 @@ __attribute__((noinline)) void trigger_write_rodata() {
 }
 
 // 栈缓冲区溢出：溢出触发栈 canary → SIGABRT（__stack_chk_fail）
-// 需要 -fstack-protector-strong 编译选项。
+// 需要 -fstack-protector 编译选项（已在 CMakeLists.txt 中配置）。
 __attribute__((noinline)) void trigger_stack_buf_overflow() {
     char buf[16];
-    // 写入远超 buf 大小，覆盖栈上的 canary → __stack_chk_fail → SIGABRT
     for (int i = 0; i < 4096; ++i) {
         buf[i] = 'A';  // NOLINT
     }
+}
+
+// 野指针写入：向不可访问的地址写入 → SIGSEGV
+__attribute__((noinline)) void trigger_wild_ptr_write() {
+    auto* p = reinterpret_cast<volatile int*>(0xDEADBEEF);  // NOLINT
+    *p = 42;  // NOLINT
+}
+
+// 空指针虚函数调用：对 nullptr 调用虚函数 → SIGSEGV
+// （vtable 查找需要通过 this 指针访问，this == nullptr → deref null）
+struct null_virtual_base {
+    virtual void crash_me() { volatile int x = 0; (void)x; }
+};
+__attribute__((noinline)) void trigger_nullptr_virtual_call() {
+    null_virtual_base* p = nullptr;
+    p->crash_me();  // NOLINT
+}
+
+// 释放后使用：先 free 再写入 → SIGABRT（需 allocator 检测）或 SIGSEGV
+// 分配大量小对象耗尽 free list，提高 UAF 被检测到的概率。
+__attribute__((noinline)) void trigger_use_after_free() {
+    constexpr int n = 256;
+    char* bufs[n];
+    for (int i = 0; i < n; ++i) {
+        bufs[i] = static_cast<char*>(::malloc(64));
+        if (bufs[i] == nullptr) std::abort();
+        bufs[i][0] = 'x';
+    }
+    for (int i = 0; i < n; ++i) {
+        ::free(bufs[i]);
+    }
+    // 此时 bufs[0] 已被释放。再次写入，大概率触发检测。
+    bufs[0][0] = 'y';  // NOLINT
+}
+
+// 非法释放：对栈上的变量调用 delete → SIGABRT
+__attribute__((noinline)) void trigger_invalid_delete() {
+    int stack_var = 42;
+    ::free(&stack_var);  // NOLINT — freeing stack pointer
+}
+
+// 未捕获的 C++ 异常导致 std::terminate → SIGABRT
+__attribute__((noinline)) void throw_from_noexcept() noexcept {
+    throw std::runtime_error("exception from noexcept");  // NOLINT — triggers terminate
+}
+
+__attribute__((noinline)) void trigger_terminate_handler() {
+    throw_from_noexcept();
+}
+
+// 堆上的数组越界写入：写过 heap buffer 末尾 → SIGSEGV
+// 使用 1 字节分配并写满一页，确保触发内存访问越界。
+__attribute__((noinline)) void trigger_heap_buf_overflow() {
+    char* p = static_cast<char*>(::malloc(1));
+    if (p == nullptr) std::abort();
+    p[0] = 'x';
+    // 写入远超分配大小，跨页边界时触发 SIGSEGV
+    for (std::size_t i = 0; i < 65536; ++i) {
+        p[i] = 'A';  // NOLINT
+    }
+    ::free(p);
+}
+
+// 非法函数调用：跳转到非可执行地址 → SIGSEGV（执行权限缺失）
+__attribute__((noinline)) void trigger_exec_non_exec() {
+#if defined(__x86_64__)
+    long page_size = ::sysconf(_SC_PAGESIZE);
+    void* p = ::mmap(nullptr, static_cast<std::size_t>(page_size),
+                     PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) std::abort();
+    // 写一条 ret 指令，但未设置 PROT_EXEC → 执行时 SIGSEGV
+    auto* cp = static_cast<unsigned char*>(p);
+    cp[0] = 0xC3;  // x86_64 ret
+    ::mprotect(p, static_cast<std::size_t>(page_size), PROT_READ);
+    auto (*fn)() = reinterpret_cast<void (*)()>(p);
+    fn();
+    ::munmap(p, static_cast<std::size_t>(page_size));
+#else
+    long page_size = ::sysconf(_SC_PAGESIZE);
+    void* p = ::mmap(nullptr, static_cast<std::size_t>(page_size),
+                     PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) std::abort();
+    // ARM64: ret = 0xD65F03C0，不设 PROT_EXEC → SIGSEGV
+    auto* sp = static_cast<uint32_t*>(p);
+    sp[0] = 0xD65F03C0;
+    ::mprotect(p, static_cast<std::size_t>(page_size), PROT_READ);
+    auto (*fn)() = reinterpret_cast<void (*)()>(p);
+    fn();
+    ::munmap(p, static_cast<std::size_t>(page_size));
+#endif
 }
 
 // ---------- 多层调用封装 ----------
@@ -230,11 +321,18 @@ void print_usage(const char* prog) {
     std::cerr << "    sigabrt         abort()" << std::endl;
     std::cerr << "    sigbus          bus error (mmap boundary / misaligned)" << std::endl;
     std::cerr << "    sigtrap         breakpoint trap" << std::endl;
-    std::cerr << "    stack_overflow  infinite recursion (stack exhaustion)" << std::endl;
-    std::cerr << "    double_free     double free (heap corruption)" << std::endl;
-    std::cerr << "    pure_virtual    pure virtual call in ctor" << std::endl;
-    std::cerr << "    write_rodata    write to read-only .rodata" << std::endl;
-    std::cerr << "    stack_buf_of    stack buffer overflow (canary fail)" << std::endl;
+    std::cerr << "    stack_overflow     infinite recursion (stack exhaustion)" << std::endl;
+    std::cerr << "    double_free        double free (heap corruption)" << std::endl;
+    std::cerr << "    pure_virtual       pure virtual call in ctor" << std::endl;
+    std::cerr << "    write_rodata       write to read-only .rodata" << std::endl;
+    std::cerr << "    stack_buf_of       stack buffer overflow (canary fail)" << std::endl;
+    std::cerr << "    wild_ptr_write     write to wild/invalid pointer" << std::endl;
+    std::cerr << "    null_virtual       virtual call on nullptr" << std::endl;
+    std::cerr << "    use_after_free     write to freed heap memory" << std::endl;
+    std::cerr << "    invalid_delete     free() on stack variable" << std::endl;
+    std::cerr << "    terminate          unhandled exception → terminate" << std::endl;
+    std::cerr << "    heap_buf_of        heap buffer overflow" << std::endl;
+    std::cerr << "    exec_nx            execute non-executable memory" << std::endl;
 }
 
 } // namespace
@@ -248,30 +346,44 @@ int main(int argc, char* argv[]) {
 
         const char* crash_type = argv[1];
 
-        // 根据参数选择触发函数
-        if (std::strcmp(crash_type, "sigfpe") == 0) {
-            g_trigger_fn = trigger_sigfpe;
-        } else if (std::strcmp(crash_type, "sigsegv") == 0) {
-            g_trigger_fn = trigger_sigsegv;
-        } else if (std::strcmp(crash_type, "sigill") == 0) {
-            g_trigger_fn = trigger_sigill;
-        } else if (std::strcmp(crash_type, "sigabrt") == 0) {
-            g_trigger_fn = trigger_sigabrt;
-        } else if (std::strcmp(crash_type, "sigbus") == 0) {
-            g_trigger_fn = trigger_sigbus;
-        } else if (std::strcmp(crash_type, "sigtrap") == 0) {
-            g_trigger_fn = trigger_sigtrap;
-        } else if (std::strcmp(crash_type, "stack_overflow") == 0) {
-            g_trigger_fn = trigger_stack_overflow;
-        } else if (std::strcmp(crash_type, "double_free") == 0) {
-            g_trigger_fn = trigger_double_free;
-        } else if (std::strcmp(crash_type, "pure_virtual") == 0) {
-            g_trigger_fn = trigger_pure_virtual;
-        } else if (std::strcmp(crash_type, "write_rodata") == 0) {
-            g_trigger_fn = trigger_write_rodata;
-        } else if (std::strcmp(crash_type, "stack_buf_of") == 0) {
-            g_trigger_fn = trigger_stack_buf_overflow;
-        } else {
+        // 根据参数选择触发函数（查表法，避免长 if-else 链）
+        struct crash_entry {
+            const char* name;
+            trigger_fn_t fn;
+            bool need_altstack;
+        };
+        const crash_entry entries[] = {
+            {"sigfpe",              trigger_sigfpe,              false},
+            {"sigsegv",             trigger_sigsegv,             false},
+            {"sigill",              trigger_sigill,              false},
+            {"sigabrt",             trigger_sigabrt,             false},
+            {"sigbus",              trigger_sigbus,              false},
+            {"sigtrap",             trigger_sigtrap,             false},
+            {"stack_overflow",      trigger_stack_overflow,      true},
+            {"double_free",         trigger_double_free,         false},
+            {"pure_virtual",        trigger_pure_virtual,        false},
+            {"write_rodata",        trigger_write_rodata,        false},
+            {"stack_buf_of",        trigger_stack_buf_overflow,  false},
+            {"wild_ptr_write",      trigger_wild_ptr_write,      false},
+            {"null_virtual",        trigger_nullptr_virtual_call,false},
+            {"use_after_free",      trigger_use_after_free,      false},
+            {"invalid_delete",      trigger_invalid_delete,      false},
+            {"terminate",           trigger_terminate_handler,   false},
+            {"heap_buf_of",         trigger_heap_buf_overflow,   false},
+            {"exec_nx",             trigger_exec_non_exec,       false},
+        };
+
+        bool found = false;
+        bool need_altstack = false;
+        for (const auto& entry : entries) {
+            if (std::strcmp(crash_type, entry.name) == 0) {
+                g_trigger_fn = entry.fn;
+                need_altstack = entry.need_altstack;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
             std::cerr << "Unknown crash type: " << crash_type << std::endl;
             print_usage(argv[0]);
             return EXIT_FAILURE;
@@ -279,7 +391,6 @@ int main(int argc, char* argv[]) {
 
         // 安装全部信号 handler。
         // 栈溢出场景需要 SA_ONSTACK + sigaltstack，否则 handler 无法执行。
-        bool need_altstack = (std::strcmp(crash_type, "stack_overflow") == 0);
         install_handler(SIGFPE);
         install_handler(SIGSEGV, need_altstack);
         install_handler(SIGILL);
