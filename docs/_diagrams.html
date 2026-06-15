@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>swp_stack_trace 原理图解</title>
+<style>
+  :root {
+    --bg: #1a1b26;
+    --card: #24283b;
+    --text: #c0caf5;
+    --accent: #7aa2f7;
+    --green: #9ece6a;
+    --red: #f7768e;
+    --yellow: #e0af68;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui,-apple-system,sans-serif;
+    padding: 2rem;
+  }
+  h1 {
+    text-align:center;
+    font-size:2rem;
+    margin-bottom:.25rem;
+    color: var(--accent);
+  }
+  h1+p { text-align:center; color:#565f89; margin-bottom:3rem; }
+  .grid {
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
+    gap: 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  .card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 4px 24px rgba(0,0,0,.3);
+  }
+  .card.wide { grid-column: 1 / -1; }
+  .card h2 {
+    font-size:1.2rem;
+    margin-bottom:1rem;
+    padding-bottom:.5rem;
+    border-bottom:1px solid #3b4261;
+    color: var(--green);
+  }
+  .mermaid {
+    background: #1a1b26;
+    border-radius: 8px;
+    padding: 1rem;
+    overflow-x: auto;
+  }
+  .legend {
+    display:flex; gap:1.5rem; flex-wrap:wrap;
+    margin-top:1rem; font-size:.85rem; color:#7a82a8;
+  }
+  .legend span { display:flex; align-items:center; gap:.3rem; }
+  .legend .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .dot-safe { background: var(--green); }
+  .dot-danger { background: var(--red); }
+  .dot-lib { background: var(--accent); }
+  .dot-kernel { background: var(--yellow); }
+  footer { text-align:center; margin-top:3rem; color:#565f89; font-size:.85rem; }
+  @media (max-width:600px) {
+    body { padding:1rem; }
+    .grid { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>swp_stack_trace 原理图解</h1>
+<p>信号处理 · 栈展开 · libunwind · 离线解析</p>
+
+<div class="grid">
+
+<!-- 1. 信号处理全流程 -->
+<div class="card wide">
+  <h2>1. 信号处理全流程</h2>
+  <div class="mermaid">
+flowchart TD
+    A["CPU 硬件异常<br/>除零 / 缺页 / 非法指令"]:::hw
+    B["内核异常处理<br/>trap handler"]:::kernel
+    C["信号生成<br/>force_sig() / send_signal()"]:::kernel
+    D["进程信号队列<br/>task_struct→pending"]:::kernel
+    E["返回用户态前<br/>do_signal() 检查 pending"]:::kernel
+    F["调用用户注册的 handler<br/>sigaction→sa_handler"]:::user
+    G["swp_stack_trace::<br/>print_stacktrace(fd)"]:::lib
+    H["libunwind 展开栈帧"]:::lib
+    I["write() 写入 stderr / 文件"]:::lib
+    J{"使用方决定后续行动"}:::user
+    K["SIG_DFL + raise(sig)<br/>→ core dump + 终止"]:::exit
+    L["_exit(EXIT_FAILURE)<br/>→ 直接退出，无 core"]:::exit
+    M["返回继续执行<br/>❌不推荐，UB后不安全"]:::danger
+
+    A --> B --> C --> D --> E --> F --> G --> H --> I
+    G -.->|" 库只做这一件事 "| H
+    I --> J
+    J -->|" 选项A"| K
+    J -->|" 选项B"| L
+    J -->|" 选项C"| M
+
+    classDef hw fill:#bb9af7,stroke:#7a6ae6,color:#1a1b26
+    classDef kernel fill:#e0af68,stroke:#bb7a1a,color:#1a1b26
+    classDef user fill:#7dcfff,stroke:#3b8fb0,color:#1a1b26
+    classDef lib fill:#9ece6a,stroke:#5a823c,color:#1a1b26
+    classDef exit fill:#9aa5ce,stroke:#6a7ab0,color:#1a1b26
+    classDef danger fill:#f7768e,stroke:#c2566e,color:#1a1b26
+  </div>
+  <div class="legend">
+    <span><span class="dot dot-kernel"></span> 内核态</span>
+    <span><span class="dot dot-lib"></span> swp_stack_trace 库</span>
+    <span><span class="dot dot-safe"></span> 安全出口</span>
+    <span><span class="dot dot-danger"></span> 不推荐路径</span>
+  </div>
+</div>
+
+<!-- 2. 栈展开原理 -->
+<div class="card">
+  <h2>2. 栈展开原理 — 栈帧结构</h2>
+  <div class="mermaid">
+graph TD
+    subgraph "进程虚拟地址空间"
+      direction BT
+      A["栈顶 (低地址)"]:::mem
+      B["trigger_sigsegv 栈帧<br/>局部变量 + 返回地址 → crash_level_1"]:::frame
+      C["crash_level_1 栈帧<br/>局部变量 + 返回地址 → crash_level_2"]:::frame
+      D["crash_level_2 栈帧<br/>局部变量 + 返回地址 → crash_level_3"]:::frame
+      E["crash_level_3 栈帧<br/>局部变量 + 返回地址 → main"]:::frame
+      F["main 栈帧<br/>main() 的局部变量 + 返回地址 → __libc_start_main"]:::frame
+      G["栈底 (高地址)"]:::mem
+    end
+
+    B -.->|" unw_step() 展开方向 "| C
+    C -.-> D
+    D -.-> E
+    E -.-> F
+
+    H["FP (帧指针) 链：<br/>每个栈帧保存了<br/>上一帧的 FP 和返回 PC"]:::info
+    I["DWARF Unwind Table：<br/>ELF 的 .eh_frame 段<br/>编码了精确的栈帧布局<br/>不受 -fomit-frame-pointer 影响"]:::info
+
+    H --> B
+    I --> B
+
+    classDef mem fill:#414868,stroke:#565f89,color:#c0caf5
+    classDef frame fill:#24283b,stroke:#9ece6a,color:#c0caf5
+    classDef info fill:#1d3557,stroke:#7aa2f7,color:#bbd5ff
+  </div>
+  <p style="font-size:.85rem;color:#7a82a8;margin-top:.5rem">
+    每次函数调用在栈上分配一个栈帧，包含局部变量、返回地址（LR/PC）和上一帧的 FP。
+    栈展开就是沿着 FP 链或 DWARF unwind table 逐帧回溯这些返回地址。
+  </p>
+</div>
+
+<!-- 3. libunwind 工作流程 -->
+<div class="card">
+  <h2>3. libunwind 工作流程</h2>
+  <div class="mermaid">
+flowchart TD
+    A["print_stacktrace(fd)"]:::entry
+    B["1. unw_getcontext(&ctx)<br/>获取当前 CPU 寄存器快照<br/>SP / PC / FP 等"]:::step
+    C["2. unw_init_local(&cursor,&ctx)<br/>用寄存器快照<br/>初始化 unwind cursor"]:::step
+    D{ "unw_step(&cursor) > 0 ?"}:::decision
+    E["3a. unw_get_reg(cursor,UNW_REG_IP,&pc)<br/>从当前帧读取返回地址(PC)"]:::step
+    F["3b. unw_get_proc_name(cursor,buf,256,&off)<br/>从 .symtab 读取函数名(mangled)"]:::step
+    G["3c. write(fd,'#N 0x&lt;pc&gt; &lt;name&gt;+&lt;off&gt;\n')<br/>格式化后写入 fd"]:::step
+    H["栈顶: 返回"]:::end
+    I{ "name_result == 0?"}:::decision
+    J["write(fd,'???')"]:::fallback
+
+    A --> B --> C --> D
+    D -->|" 是: 还有上一帧 "| E --> F --> I
+    I -->|" 是 "| G --> D
+    I -->|" 否: 符号解析失败 "| J --> D
+    D -->|" 否: 到达栈顶 "| H
+
+    classDef entry fill:#7aa2f7,stroke:#4a6ab8,color:#1a1b26
+    classDef step fill:#9ece6a,stroke:#5a823c,color:#1a1b26
+    classDef decision fill:#e0af68,stroke:#bb7a1a,color:#1a1b26
+    classDef end fill:#9aa5ce,stroke:#6a7ab0,color:#1a1b26
+    classDef fallback fill:#565f89,stroke:#414868,color:#c0caf5
+  </div>
+  <p style="font-size:.85rem;color:#7a82a8;margin-top:.5rem">
+    unw_step() 返回正值时表示成功展开到上一帧，返回 0 表示已到达栈顶。
+    所有操作仅读取进程地址空间中已映射的数据，不调 malloc/printf。
+  </p>
+</div>
+
+<!-- 4. async-signal-safe 对比 -->
+<div class="card">
+  <h2>4. async-signal-safe 对比</h2>
+  <div class="mermaid">
+graph LR
+  subgraph SAFE["✅ 信号安全 (本库使用的)"]
+    direction TB
+    A1["write() 系统调用"]:::safe
+    A2["open() / close()"]:::safe
+    A3["_exit() / abort()"]:::safe
+    A4["sigaction() / raise()"]:::safe
+    A5["栈上 char buf[N]"]:::safe
+    A6["unw_getcontext"]:::safe
+    A7["unw_step (本地展开)"]:::safe
+  end
+
+  subgraph DANGER["❌ 信号不安全 (本库避开的)"]
+    direction TB
+    B1["printf / snprintf"]:::danger
+    B2["malloc / free / new"]:::danger
+    B3["fopen / fwrite"]:::danger
+    B4["C++ STL 容器"]:::danger
+    B5["pthread_mutex_lock"]:::danger
+    B6["backtrace_symbols"]:::danger
+    B7["__cxa_demangle"]:::danger
+  end
+
+  SAFE ---|" swp_stack_trace 仅使用左侧 "| DANGER
+
+  classDef safe fill:#9ece6a,stroke:#5a823c,color:#1a1b26
+  classDef danger fill:#f7768e,stroke:#c2566e,color:#1a1b26
+  </div>
+  <p style="font-size:.85rem;color:#7a82a8;margin-top:.5rem">
+    信号 handler 被中断的代码可能正持有锁（如 malloc 内部锁）。
+    如果 handler 中再次尝试获取同一把锁 → 死锁。
+    本库通过只用左侧的操作来彻底规避。
+  </p>
+</div>
+
+<!-- 5. Core dump 与堆栈文本互补 -->
+<div class="card">
+  <h2>5. Core dump 与堆栈文本的互补关系</h2>
+  <div class="mermaid">
+sequenceDiagram
+    participant App as 应用程序
+    participant Kernel as 内核
+    participant Handler as crash_signal_handler
+    participant Lib as swp_stack_trace
+    participant Disk as 磁盘
+
+    App->>Kernel: 触发 SIGSEGV
+    Kernel->>Handler: 调用注册的 handler
+    Handler->>Lib: print_stacktrace(STDERR_FILENO)
+    Lib->>Disk: 写入 stderr → 终端/日志文件
+    Note over Lib,Disk: ① 先打印: 保留<b>原始崩溃现场</b>的调用栈
+
+    Handler->>Handler: signal(sig, SIG_DFL)
+    Handler->>Kernel: raise(sig)
+    Kernel-->>Kernel: 默认行为: 终止 + core dump
+    Kernel->>Disk: 写入 core 文件
+    Note over Kernel,Disk: ② 再 core: 保留<b>完整内存快照</b>
+
+    Note over App,Disk: 文本堆栈 (原始现场) + core dump (内存快照) = 完整事后分析
+  </div>
+  <p style="font-size:.85rem;color:#7a82a8;margin-top:.5rem">
+    先打印堆栈文本，再 re-raise 生成 core dump。两者互补：
+    文本记录崩溃时的调用链，core dump 提供完整内存用于 gdb 深入分析。
+  </p>
+</div>
+
+<!-- 6. 离线解析流程 -->
+<div class="card wide">
+  <h2>6. 离线解析流程 — symbolize_stack.py</h2>
+  <div class="mermaid">
+flowchart TD
+    A["崩溃时输出到 stderr / 日志文件<br/>/tmp/swp_crash.log"]:::entry
+    B["symbolize_stack.py"]:::tool
+
+    subgraph Parse["步骤 1: 解析输入"]
+      C["正则提取 PC 地址<br/>(0x... 格式)"]:::step
+      D["识别平台<br/>Linux → addr2line<br/>macOS → atos"]:::step
+    end
+
+    subgraph Linux["Linux: addr2line"]
+      E1["addr2line -e &lt;binary&gt; &lt;pc1&gt; &lt;pc2&gt;..."]:::cmd
+      E2["返回: file:line 对"]:::cmd
+    end
+
+    subgraph macOS["macOS: atos"]
+      F1["nm -n &lt;binary&gt; → 符号文件偏移"]:::cmd
+      F2["otool -l | grep vmaddr → 计算出 slide"]:::cmd
+      F3["atos -o &lt;binary&gt; -l &lt;base&gt; &lt;pc&gt;"]:::cmd
+      F4["返回: 函数名 + (file:line)"]:::cmd
+    end
+
+    G["合并: 原始行 + file:line 后缀"]:::step
+    H["输出: 带源码位置的完整堆栈"]:::end
+
+    A --> B --> C --> D
+    D -->|" Linux "| E1 --> E2 --> G
+    D -->|" macOS "| F1 --> F2 --> F3 --> F4 --> G
+    G --> H
+
+    classDef entry fill:#7aa2f7,stroke:#4a6ab8,color:#1a1b26
+    classDef tool fill:#bb9af7,stroke:#7a6ae6,color:#1a1b26
+    classDef step fill:#9ece6a,stroke:#5a823c,color:#1a1b26
+    classDef cmd fill:#565f89,stroke:#414868,color:#c0caf5
+    classDef end fill:#e0af68,stroke:#bb7a1a,color:#1a1b26
+  </div>
+  <div class="legend">
+    <span>用法:</span>
+    <code style="color:var(--green)">./run.sh 2>&1 | ./symbolize_stack.py ./build/src/example/crash_demo</code>
+    <span>或</span>
+    <code style="color:var(--green)">./symbolize_stack.py /tmp/swp_crash.log</code>
+  </div>
+</div>
+
+</div>
+
+<footer>
+  swp_stack_trace &mdash; C++17 async-signal-safe crash stack trace library &mdash;
+  <a href="swp-stack-trace-principle.md" style="color:var(--accent)">原理文档</a> &middot;
+  <a href="signal-reference.md" style="color:var(--accent)">信号详解</a>
+</footer>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#7aa2f7',
+      primaryTextColor: '#1a1b26',
+      primaryBorderColor: '#4a6ab8',
+      lineColor: '#565f89',
+      secondaryColor: '#9ece6a',
+      tertiaryColor: '#bb9af7',
+      fontSize: '14px',
+    },
+    flowchart: { useMaxWidth: true, htmlLabels: true },
+    sequence: { useMaxWidth: true },
+  });
+</script>
+
+</body>
+</html>
