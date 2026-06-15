@@ -31,3 +31,6 @@ coverage/
 *.info
 # Worktrees
 .worktrees/
+
+# CMake/CTest temporary files
+Testing/
