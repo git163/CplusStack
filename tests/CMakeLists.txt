@@ -29,5 +29,10 @@ else()
 endif()
 target_include_directories(unit_tests PRIVATE ../src/include)
 
+# 保留帧指针并禁用优化，便于在 macOS 等平台上验证多层调用栈的展开。
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    target_compile_options(unit_tests PRIVATE -fno-omit-frame-pointer -O0)
+endif()
+
 # 让每个 TEST() 自动注册为 CTest 用例
 gtest_discover_tests(unit_tests)

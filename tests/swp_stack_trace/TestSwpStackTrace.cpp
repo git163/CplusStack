@@ -114,6 +114,19 @@ void call_print_stacktrace() {
     swp_stack_trace::print_stacktrace(STDERR_FILENO);
 }
 
+// 多层嵌套调用，验证 print_stacktrace 能展开较深的调用栈。
+__attribute__((noinline)) void nested_print_level_1() {
+    swp_stack_trace::print_stacktrace(STDERR_FILENO);
+}
+
+__attribute__((noinline)) void nested_print_level_2() {
+    nested_print_level_1();
+}
+
+__attribute__((noinline)) void nested_print_level_3() {
+    nested_print_level_2();
+}
+
 } // namespace
 
 // 基础冒烟测试：print_stacktrace 在普通调用场景下不应崩溃或抛异常。
@@ -133,7 +146,7 @@ TEST(SwpStackTrace, output_contains_current_function) {
     {
         stderr_redirector redirect(pipe_write.release());
         ASSERT_TRUE(redirect.ok());
-        swp_stack_trace::print_stacktrace(STDERR_FILENO);
+        nested_print_level_3();
     }
 
     // 读取捕获的输出；k_stack_trace_buffer_size 足以容纳常规调用栈。
@@ -158,6 +171,19 @@ void signal_test_handler(int /*sig*/) {
     swp_stack_trace::print_stacktrace(signal_test_pipe_fd);
 }
 
+// 多层嵌套调用触发信号，验证 handler 中的堆栈展开。
+__attribute__((noinline)) void nested_signal_level_1() {
+    ::raise(SIGUSR1);
+}
+
+__attribute__((noinline)) void nested_signal_level_2() {
+    nested_signal_level_1();
+}
+
+__attribute__((noinline)) void nested_signal_level_3() {
+    nested_signal_level_2();
+}
+
 // 验证 print_stacktrace 在信号 handler 上下文中仍能正常工作。
 TEST(SwpStackTrace, works_from_signal_handler) {
     int raw_pipefd[2];
@@ -178,7 +204,7 @@ TEST(SwpStackTrace, works_from_signal_handler) {
     // 即使 raise 或 handler 中发生异常，析构时也会恢复旧 handler。
     sigaction_restorer restorer(SIGUSR1, old_sa);
 
-    ::raise(SIGUSR1);
+    nested_signal_level_3();
 
     // 关闭写端，确保 read 能返回 EOF。
     pipe_write.reset();
