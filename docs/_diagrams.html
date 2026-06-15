@@ -1,339 +1,211 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>swp_stack_trace 原理图解</title>
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>swp_stack_trace Diagrams</title>
 <style>
-  :root {
-    --bg: #1a1b26;
-    --card: #24283b;
-    --text: #c0caf5;
-    --accent: #7aa2f7;
-    --green: #9ece6a;
-    --red: #f7768e;
-    --yellow: #e0af68;
-  }
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font: 16px/1.6 system-ui,-apple-system,sans-serif;
-    padding: 2rem;
-  }
-  h1 {
-    text-align:center;
-    font-size:2rem;
-    margin-bottom:.25rem;
-    color: var(--accent);
-  }
-  h1+p { text-align:center; color:#565f89; margin-bottom:3rem; }
-  .grid {
-    display:grid;
-    grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
-    gap: 2rem;
-    max-width: 1400px;
-    margin: 0 auto;
-  }
-  .card {
-    background: var(--card);
-    border-radius: 12px;
-    padding: 1.5rem;
-    box-shadow: 0 4px 24px rgba(0,0,0,.3);
-  }
-  .card.wide { grid-column: 1 / -1; }
-  .card h2 {
-    font-size:1.2rem;
-    margin-bottom:1rem;
-    padding-bottom:.5rem;
-    border-bottom:1px solid #3b4261;
-    color: var(--green);
-  }
-  .mermaid {
-    background: #1a1b26;
-    border-radius: 8px;
-    padding: 1rem;
-    overflow-x: auto;
-  }
-  .legend {
-    display:flex; gap:1.5rem; flex-wrap:wrap;
-    margin-top:1rem; font-size:.85rem; color:#7a82a8;
-  }
-  .legend span { display:flex; align-items:center; gap:.3rem; }
-  .legend .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
-  .dot-safe { background: var(--green); }
-  .dot-danger { background: var(--red); }
-  .dot-lib { background: var(--accent); }
-  .dot-kernel { background: var(--yellow); }
-  footer { text-align:center; margin-top:3rem; color:#565f89; font-size:.85rem; }
-  @media (max-width:600px) {
-    body { padding:1rem; }
-    .grid { grid-template-columns:1fr; }
-  }
-</style>
-</head>
-<body>
+:root{--bg:#1a1b26;--card:#24283b;--text:#c0caf5;--accent:#7aa2f7;--green:#9ece6a;--red:#f7768e;--yellow:#e0af68}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,sans-serif;padding:2rem}
+h1{text-align:center;font-size:2rem;margin-bottom:.25rem;color:var(--accent)}
+h1+p{text-align:center;color:#565f89;margin-bottom:3rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(500px,1fr));gap:2rem;max-width:1500px;margin:0 auto}
+.card{background:var(--card);border-radius:12px;padding:1.5rem;box-shadow:0 4px 24px rgba(0,0,0,.3)}
+.card.wide{grid-column:1/-1}
+.card h2{font-size:1.2rem;margin-bottom:1rem;padding-bottom:.5rem;border-bottom:1px solid #3b4261;color:var(--green)}
+.mermaid{background:#1a1b26;border-radius:8px;padding:1rem;overflow-x:auto;min-height:40px}
+.mermaid svg{max-width:100%;height:auto;display:block;margin:0 auto}
+.legend{display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:1rem;font-size:.85rem;color:#7a82a8}
+.legend .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.dot-safe{background:var(--green)}.dot-danger{background:var(--red)}.dot-lib{background:var(--accent)}.dot-kernel{background:var(--yellow)}
+.caption{font-size:.85rem;color:#7a82a8;margin-top:.5rem}
+footer{text-align:center;margin-top:3rem;color:#565f89;font-size:.85rem}
+@media(max-width:600px){body{padding:1rem}.grid{grid-template-columns:1fr}}
+</style></head><body>
 
 <h1>swp_stack_trace 原理图解</h1>
-<p>信号处理 · 栈展开 · libunwind · 离线解析</p>
+<p>信号处理 . 栈展开 . libunwind . 离线解析</p>
 
 <div class="grid">
 
-<!-- 1. 信号处理全流程 -->
-<div class="card wide">
-  <h2>1. 信号处理全流程</h2>
-  <div class="mermaid">
-flowchart TD
-    A["CPU 硬件异常<br/>除零 / 缺页 / 非法指令"]:::hw
-    B["内核异常处理<br/>trap handler"]:::kernel
-    C["信号生成<br/>force_sig / send_signal"]:::kernel
-    D["进程信号队列<br/>task_struct pending"]:::kernel
-    E["返回用户态前<br/>do_signal() 检查 pending"]:::kernel
-    F["调用用户注册的 handler<br/>sigaction sa_handler"]:::user
-    G["swp_stack_trace::<br/>print_stacktrace(fd)"]:::lib
-    H["libunwind 展开栈帧"]:::lib
-    I["write() 写入 stderr / 文件"]:::lib
-    J{"使用方决定后续行动"}:::user
-    K["SIG_DFL + raise(sig)<br/>core dump + terminate"]:::exit
-    L["_exit(EXIT_FAILURE)<br/>exit directly, no core"]:::exit
-    M["return from handler<br/>not safe after UB"]:::danger
+<div class="card wide"><h2>1. 信号处理全流程</h2><div id="d1" class="mermaid"></div>
+<div class="legend">
+<span><span class="dot dot-kernel"></span> 内核态</span>
+<span><span class="dot dot-lib"></span> swp_stack_trace</span>
+<span><span class="dot dot-safe"></span> 安全出口</span>
+<span><span class="dot dot-danger"></span> 不推荐</span>
+</div></div>
 
-    A --> B --> C --> D --> E --> F --> G --> H --> I
-    G -.->|" 库只做这一件事 "| H
-    I --> J
-    J -->|" 选项A"| K
-    J -->|" 选项B"| L
-    J -->|" 选项C"| M
+<div class="card"><h2>2. 栈帧与展开原理</h2><div id="d2" class="mermaid"></div>
+<p class="caption">每次函数调用分配一个栈帧。libunwind 沿 DWARF unwind table 逐帧回溯返回地址。</p></div>
 
-    classDef hw fill:#bb9af7,stroke:#7a6ae6,color:#1a1b26
-    classDef kernel fill:#e0af68,stroke:#bb7a1a,color:#1a1b26
-    classDef user fill:#7dcfff,stroke:#3b8fb0,color:#1a1b26
-    classDef lib fill:#9ece6a,stroke:#5a823c,color:#1a1b26
-    classDef exit fill:#9aa5ce,stroke:#6a7ab0,color:#1a1b26
-    classDef danger fill:#f7768e,stroke:#c2566e,color:#1a1b26
-  </div>
-  <div class="legend">
-    <span><span class="dot dot-kernel"></span> 内核态</span>
-    <span><span class="dot dot-lib"></span> swp_stack_trace 库</span>
-    <span><span class="dot dot-safe"></span> 安全出口</span>
-    <span><span class="dot dot-danger"></span> 不推荐路径</span>
-  </div>
-</div>
+<div class="card"><h2>3. libunwind 工作流程</h2><div id="d3" class="mermaid"></div>
+<p class="caption">unw_step 返回正值 = 还有上一帧; 返回 0 = 栈顶。全程不调 malloc/printf。</p></div>
 
-<!-- 2. 栈展开原理 -->
-<div class="card">
-  <h2>2. 栈展开原理 — 栈帧结构</h2>
-  <div class="mermaid">
-graph TD
-    subgraph "进程虚拟地址空间"
-      direction BT
-      A["栈顶 (低地址)"]:::mem
-      B["trigger_sigsegv 栈帧<br/>局部变量 + 返回到 crash_level_1"]:::frame
-      C["crash_level_1 栈帧<br/>局部变量 + 返回到 crash_level_2"]:::frame
-      D["crash_level_2 栈帧<br/>局部变量 + 返回到 crash_level_3"]:::frame
-      E["crash_level_3 栈帧<br/>局部变量 + 返回到 main"]:::frame
-      F["main 栈帧<br/>main() 局部变量 + 返回到 libc"]:::frame
-      G["栈底 (高地址)"]:::mem
-    end
+<div class="card"><h2>4. async-signal-safe 对比</h2><div id="d4" class="mermaid"></div>
+<p class="caption">信号 handler 被中断的代码可能持有锁。handler 中再次拿同一把锁 = 死锁。</p></div>
 
-    B -.->|" unw_step() 展开方向 "| C
-    C -.-> D
-    D -.-> E
-    E -.-> F
+<div class="card"><h2>5. Core dump 与堆栈互补</h2><div id="d5" class="mermaid"></div>
+<p class="caption">先打印堆栈文本（原始现场），再 re-raise 生成 core dump（完整内存）。</p></div>
 
-    H["FP (帧指针) 链：<br/>每个栈帧保存了<br/>上一帧的 FP 和返回 PC"]:::info
-    I["DWARF Unwind Table：<br/>ELF 的 .eh_frame 段<br/>编码了精确的栈帧布局<br/>不受 -fomit-frame-pointer 影响"]:::info
-
-    H --> B
-    I --> B
-
-    classDef mem fill:#414868,stroke:#565f89,color:#c0caf5
-    classDef frame fill:#24283b,stroke:#9ece6a,color:#c0caf5
-    classDef info fill:#1d3557,stroke:#7aa2f7,color:#bbd5ff
-  </div>
-  <p style="font-size:.85rem;color:#7a82a8;margin-top:.5rem">
-    每次函数调用在栈上分配一个栈帧，包含局部变量、返回地址（LR/PC）和上一帧的 FP。
-    栈展开就是沿着 FP 链或 DWARF unwind table 逐帧回溯这些返回地址。
-  </p>
-</div>
-
-<!-- 3. libunwind 工作流程 -->
-<div class="card">
-  <h2>3. libunwind 工作流程</h2>
-  <div class="mermaid">
-flowchart TD
-    A[print_stacktrace fd]:::entry
-    B[Step 1: unw_getcontext<br/>CPU register snapshot]:::step
-    C[Step 2: unw_init_local<br/>initialize unwind cursor]:::step
-    D{more frames?}:::decision
-    E[Step 3a: unw_get_reg<br/>read PC from frame]:::step
-    F[Step 3b: unw_get_proc_name<br/>read mangled function name]:::step
-    G[Step 3c: write<br/>output to fd]:::step
-    H[done - return]:::end
-    I{symbol resolved?}:::decision
-    J[write ??? fallback]:::fallback
-
-    A --> B --> C --> D
-    D -->|yes| E --> F --> I
-    I -->|yes| G --> D
-    I -->|no| J --> D
-    D -->|no| H
-
-    classDef entry fill:#7aa2f7,stroke:#4a6ab8,color:#1a1b26
-    classDef step fill:#9ece6a,stroke:#5a823c,color:#1a1b26
-    classDef decision fill:#e0af68,stroke:#bb7a1a,color:#1a1b26
-    classDef end fill:#9aa5ce,stroke:#6a7ab0,color:#1a1b26
-    classDef fallback fill:#565f89,stroke:#414868,color:#c0caf5
-  </div>
-  <p style="font-size:.85rem;color:#7a82a8;margin-top:.5rem">
-    unw_step() 返回正值时表示成功展开到上一帧，返回 0 表示已到达栈顶。
-    所有操作仅读取进程地址空间中已映射的数据，不调 malloc/printf。
-  </p>
-</div>
-
-<!-- 4. async-signal-safe 对比 -->
-<div class="card">
-  <h2>4. async-signal-safe 对比</h2>
-  <div class="mermaid">
-graph LR
-  subgraph SAFE["✅ 信号安全 (本库使用的)"]
-    direction TB
-    A1["write() 系统调用"]:::safe
-    A2["open() / close()"]:::safe
-    A3["_exit() / abort()"]:::safe
-    A4["sigaction() / raise()"]:::safe
-    A5["栈上 char buf[N]"]:::safe
-    A6["unw_getcontext"]:::safe
-    A7["unw_step (本地展开)"]:::safe
-  end
-
-  subgraph DANGER["❌ 信号不安全 (本库避开的)"]
-    direction TB
-    B1["printf / snprintf"]:::danger
-    B2["malloc / free / new"]:::danger
-    B3["fopen / fwrite"]:::danger
-    B4["C++ STL 容器"]:::danger
-    B5["pthread_mutex_lock"]:::danger
-    B6["backtrace_symbols"]:::danger
-    B7["__cxa_demangle"]:::danger
-  end
-
-  SAFE ---|" swp_stack_trace 仅使用左侧 "| DANGER
-
-  classDef safe fill:#9ece6a,stroke:#5a823c,color:#1a1b26
-  classDef danger fill:#f7768e,stroke:#c2566e,color:#1a1b26
-  </div>
-  <p style="font-size:.85rem;color:#7a82a8;margin-top:.5rem">
-    信号 handler 被中断的代码可能正持有锁（如 malloc 内部锁）。
-    如果 handler 中再次尝试获取同一把锁 → 死锁。
-    本库通过只用左侧的操作来彻底规避。
-  </p>
-</div>
-
-<!-- 5. Core dump 与堆栈文本互补 -->
-<div class="card">
-  <h2>5. Core dump 与堆栈文本的互补关系</h2>
-  <div class="mermaid">
-sequenceDiagram
-    participant App as 应用程序
-    participant Kernel as 内核
-    participant Handler as crash_signal_handler
-    participant Lib as swp_stack_trace
-    participant Disk as 磁盘
-
-    App->>Kernel: 触发 SIGSEGV
-    Kernel->>Handler: 调用注册的 handler
-    Handler->>Lib: print_stacktrace(STDERR_FILENO)
-    Lib->>Disk: 写入 stderr → 终端/日志文件
-    Note over Lib,Disk: ① 先打印: 保留<b>原始崩溃现场</b>的调用栈
-
-    Handler->>Handler: signal(sig, SIG_DFL)
-    Handler->>Kernel: raise(sig)
-    Kernel-->>Kernel: 默认行为: 终止 + core dump
-    Kernel->>Disk: 写入 core 文件
-    Note over Kernel,Disk: ② 再 core: 保留<b>完整内存快照</b>
-
-    Note over App,Disk: 文本堆栈 (原始现场) + core dump (内存快照) = 完整事后分析
-  </div>
-  <p style="font-size:.85rem;color:#7a82a8;margin-top:.5rem">
-    先打印堆栈文本，再 re-raise 生成 core dump。两者互补：
-    文本记录崩溃时的调用链，core dump 提供完整内存用于 gdb 深入分析。
-  </p>
-</div>
-
-<!-- 6. 离线解析流程 -->
-<div class="card wide">
-  <h2>6. 离线解析流程 — symbolize_stack.py</h2>
-  <div class="mermaid">
-flowchart TD
-    A["崩溃时输出到 stderr / 日志文件<br/>/tmp/swp_crash.log"]:::entry
-    B["symbolize_stack.py"]:::tool
-
-    subgraph Parse["步骤 1: 解析输入"]
-      C["正则提取 PC 地址<br/>(0x... 格式)"]:::step
-      D["识别平台<br/>Linux - addr2line<br/>macOS - atos"]:::step
-    end
-
-    subgraph Linux["Linux: addr2line"]
-      E1["addr2line -e binary pc1 pc2 ..."]:::cmd
-      E2["返回 file:line 对"]:::cmd
-    end
-
-    subgraph macOS["macOS: atos"]
-      F1["nm -n binary : 符号文件偏移"]:::cmd
-      F2["otool -l | grep vmaddr : 计算出 slide"]:::cmd
-      F3["atos -o binary -l base pc"]:::cmd
-      F4["返回: 函数名 + (file:line)"]:::cmd
-    end
-
-    G["合并: 原始行 + file:line 后缀"]:::step
-    H["输出: 带源码位置的完整堆栈"]:::end
-
-    A --> B --> C --> D
-    D -->|" Linux "| E1 --> E2 --> G
-    D -->|" macOS "| F1 --> F2 --> F3 --> F4 --> G
-    G --> H
-
-    classDef entry fill:#7aa2f7,stroke:#4a6ab8,color:#1a1b26
-    classDef tool fill:#bb9af7,stroke:#7a6ae6,color:#1a1b26
-    classDef step fill:#9ece6a,stroke:#5a823c,color:#1a1b26
-    classDef cmd fill:#565f89,stroke:#414868,color:#c0caf5
-    classDef end fill:#e0af68,stroke:#bb7a1a,color:#1a1b26
-  </div>
-  <div class="legend">
-    <span>用法:</span>
-    <code style="color:var(--green)">./run.sh 2>&1 | ./symbolize_stack.py ./build/src/example/crash_demo</code>
-    <span>或</span>
-    <code style="color:var(--green)">./symbolize_stack.py /tmp/swp_crash.log</code>
-  </div>
-</div>
+<div class="card wide"><h2>6. 离线解析流程</h2><div id="d6" class="mermaid"></div>
+<p class="caption">用法: ./run.sh 2>&amp;1 | ./symbolize_stack.py binary 或 ./symbolize_stack.py logfile</p></div>
 
 </div>
 
-<footer>
-  swp_stack_trace &mdash; C++17 async-signal-safe crash stack trace library &mdash;
-  <a href="swp-stack-trace-principle.md" style="color:var(--accent)">原理文档</a> &middot;
-  <a href="signal-reference.md" style="color:var(--accent)">信号详解</a>
-</footer>
+<footer>swp_stack_trace . C++17 async-signal-safe crash stack trace library . <a href="swp-stack-trace-principle.md" style="color:var(--accent)">原理文档</a></footer>
 
 <script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({
-    startOnLoad: true,
-    theme: 'dark',
-    themeVariables: {
-      primaryColor: '#7aa2f7',
-      primaryTextColor: '#1a1b26',
-      primaryBorderColor: '#4a6ab8',
-      lineColor: '#565f89',
-      secondaryColor: '#9ece6a',
-      tertiaryColor: '#bb9af7',
-      fontSize: '14px',
-    },
-    flowchart: { useMaxWidth: true, htmlLabels: true },
-    sequence: { useMaxWidth: true },
-  });
-</script>
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({startOnLoad:false,theme:'dark',themeVariables:{primaryColor:'#7aa2f7',primaryTextColor:'#1a1b26',secondaryColor:'#9ece6a',tertiaryColor:'#bb9af7',lineColor:'#565f89',fontSize:'17px'}});
 
-</body>
-</html>
+const defs = {
+entry: 'fill:#7aa2f7,stroke:#4a6ab8,color:#1a1b26',
+step: 'fill:#9ece6a,stroke:#5a823c,color:#1a1b26',
+decision: 'fill:#e0af68,stroke:#bb7a1a,color:#1a1b26',
+end: 'fill:#9aa5ce,stroke:#6a7ab0,color:#1a1b26',
+fallback: 'fill:#565f89,stroke:#414868,color:#c0caf5',
+hw: 'fill:#bb9af7,stroke:#7a6ae6,color:#1a1b26',
+kernel: 'fill:#e0af68,stroke:#bb7a1a,color:#1a1b26',
+user: 'fill:#7dcfff,stroke:#3b8fb0,color:#1a1b26',
+lib: 'fill:#9ece6a,stroke:#5a823c,color:#1a1b26',
+exit: 'fill:#9aa5ce,stroke:#6a7ab0,color:#1a1b26',
+danger: 'fill:#f7768e,stroke:#c2566e,color:#1a1b26',
+safe: 'fill:#9ece6a,stroke:#5a823c,color:#1a1b26',
+mem: 'fill:#414868,stroke:#565f89,color:#c0caf5',
+frame: 'fill:#24283b,stroke:#9ece6a,color:#c0caf5',
+info: 'fill:#1d3557,stroke:#7aa2f7,color:#bbd5ff',
+tool: 'fill:#bb9af7,stroke:#7a6ae6,color:#1a1b26',
+cmd: 'fill:#565f89,stroke:#414868,color:#c0caf5',
+};
+
+function cls(map) { return Object.entries(map).map(([k,v])=>`classDef ${k} ${v}`).join('\n'); }
+
+const diagrams = {
+d1: `flowchart TD
+  A[CPU hardware exception]:::hw
+  B[kernel trap handler]:::kernel
+  C[signal generation<br/>force_sig / send_signal]:::kernel
+  D[task_struct pending queue]:::kernel
+  E[do_signal on return to user]:::kernel
+  F[user handler via sigaction]:::user
+  G[swp_stack_trace<br/>print_stacktrace fd]:::lib
+  H[libunwind unwinds stack]:::lib
+  I[write to stderr or file]:::lib
+  J{user decides<br/>next action}:::user
+  K[SIG_DFL + raise<br/>core dump + terminate]:::exit
+  L[_exit directly<br/>no core dump]:::exit
+  M[return from handler<br/>not safe after UB]:::danger
+  A-->B-->C-->D-->E-->F-->G-->H-->I
+  G-.->H
+  I-->J
+  J-->|option A|K
+  J-->|option B|L
+  J-->|option C|M
+  ${cls({hw:defs.hw,kernel:defs.kernel,user:defs.user,lib:defs.lib,exit:defs.exit,danger:defs.danger})}`,
+
+d2: `flowchart TD
+  subgraph STACK["process virtual address space (high to low)"]
+    A[main stack frame<br/>return to libc]:::frame
+    B[crash_level_3 frame<br/>return to main]:::frame
+    C[crash_level_2 frame<br/>return to crash_level_3]:::frame
+    D[crash_level_1 frame<br/>return to crash_level_2]:::frame
+    E[trigger_sigsegv frame<br/>current execution]:::frame
+  end
+  F[FP frame pointer chain<br/>each frame saves<br/>previous FP and return PC]:::info
+  G[DWARF unwind table<br/>ELF .eh_frame section<br/>works without FP]:::info
+  F-->E
+  G-->E
+  B-.->|unw_step|C-.->D-.->E
+  ${cls({frame:defs.frame,info:defs.info})}`,
+
+d3: `flowchart TD
+  A[print_stacktrace fd]:::entry
+  B[Step 1: unw_getcontext<br/>CPU register snapshot]:::step
+  C[Step 2: unw_init_local<br/>initialize cursor]:::step
+  D{more frames?}:::decision
+  E[Step 3a: unw_get_reg<br/>read PC from frame]:::step
+  F[Step 3b: unw_get_proc_name<br/>read mangled name]:::step
+  G[Step 3c: write<br/>output to fd]:::step
+  H[done - return]:::end
+  I{name resolved?}:::decision
+  J[write ??? fallback]:::fallback
+  A-->B-->C-->D
+  D-->|yes|E-->F-->I
+  I-->|yes|G-->D
+  I-->|no|J-->D
+  D-->|no|H
+  ${cls({entry:defs.entry,step:defs.step,decision:defs.decision,end:defs.end,fallback:defs.fallback})}`,
+
+d4: `flowchart LR
+  subgraph SAFE["signal-safe (this library uses)"]
+    A1[write syscall]:::safe
+    A2[open / close]:::safe
+    A3[_exit / abort]:::safe
+    A4[sigaction / raise]:::safe
+    A5[stack char buf N]:::safe
+    A6[unw_getcontext]:::safe
+    A7[unw_step local]:::safe
+  end
+  subgraph UNSAFE["not safe (this library avoids)"]
+    B1[printf / snprintf]:::danger
+    B2[malloc / free / new]:::danger
+    B3[fopen / fwrite]:::danger
+    B4[C++ STL containers]:::danger
+    B5[pthread_mutex_lock]:::danger
+    B6[backtrace_symbols]:::danger
+    B7[__cxa_demangle]:::danger
+  end
+  ${cls({safe:defs.safe,danger:defs.danger})}`,
+
+d5: `sequenceDiagram
+  participant App as application
+  participant Kernel as kernel
+  participant H as signal handler
+  participant Lib as swp_stack_trace
+  participant Disk as disk
+  App->>Kernel: SIGSEGV triggered
+  Kernel->>H: invoke registered handler
+  H->>Lib: print_stacktrace(STDERR_FILENO)
+  Lib->>Disk: write to stderr / log file
+  Note over Lib,Disk: step 1: capture original crash stack
+  H->>H: signal(sig, SIG_DFL)
+  H->>Kernel: raise(sig)
+  Kernel-->>Kernel: default action: core dump + terminate
+  Kernel->>Disk: write core file
+  Note over Kernel,Disk: step 2: core file with full memory snapshot`,
+
+d6: `flowchart TD
+  A[crash output to stderr or log<br/>e.g. /tmp/swp_crash.log]:::entry
+  B[symbolize_stack.py]:::tool
+  C[parse: regex extract PC<br/>pattern 0x...]:::step
+  D[detect platform<br/>Linux or macOS]:::step
+  subgraph LINUX["Linux: addr2line"]
+    E1[addr2line -e binary pc...]:::cmd
+    E2[returns file:line]:::cmd
+  end
+  subgraph MACOS["macOS: atos"]
+    F1[nm -n binary for offsets]:::cmd
+    F2[otool -l to compute slide]:::cmd
+    F3[atos -o binary -l base pc]:::cmd
+    F4[returns name and file:line]:::cmd
+  end
+  G[merge: original line<br/>plus file:line suffix]:::step
+  H[final output: stack trace<br/>with source locations]:::end
+  A-->B-->C-->D
+  D-->|Linux|E1-->E2-->G
+  D-->|macOS|F1-->F2-->F3-->F4-->G
+  G-->H
+  ${cls({entry:defs.entry,tool:defs.tool,step:defs.step,cmd:defs.cmd,end:defs.end})}`,
+};
+
+async function renderAll() {
+  for (const [id, code] of Object.entries(diagrams)) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    try {
+      const { svg } = await mermaid.render(id+'-svg', code);
+      el.innerHTML = svg;
+    } catch (e) {
+      el.innerHTML = '<pre style="color:#f7768e">render error: '+e.message+'</pre>';
+    }
+  }
+}
+renderAll();
+</script></body></html>
