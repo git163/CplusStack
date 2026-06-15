@@ -1,26 +1,32 @@
 #!/bin/bash
-# 运行 stack 主程序（先编译后执行）
+# 运行 crash_demo 示例（先编译后执行）
+# crash_demo 会故意触发崩溃信号并打印堆栈，退出码非 0 是预期行为。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
+DEMO_BIN="$BUILD_DIR/src/example/crash_demo"
 
-# 检查是否需要重新编译
 need_build=false
 if [ ! -d "$BUILD_DIR" ]; then
     need_build=true
-elif [ ! -x "$BUILD_DIR/stack" ]; then
+elif [ ! -x "$DEMO_BIN" ]; then
     need_build=true
 fi
 
 if [ "$need_build" = true ]; then
-    echo "正在编译..."
+    echo "Building crash_demo..."
     cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR"
-    cmake --build "$BUILD_DIR" -j
+    cmake --build "$BUILD_DIR" --target crash_demo -j
     if [ $? -ne 0 ]; then
-        echo "编译失败"
+        echo "Build failed"
         exit 1
     fi
-    echo "编译完成"
+    echo "Build finished"
 fi
 
-"$BUILD_DIR/stack" "$@"
+echo "Running crash_demo (it will crash intentionally)..."
+"$DEMO_BIN" "$@"
+exit_code=$?
+
+echo ""
+echo "crash_demo exited with code $exit_code (non-zero is expected due to signal)"
