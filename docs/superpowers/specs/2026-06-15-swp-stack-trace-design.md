@@ -74,8 +74,8 @@
 
 ```cpp
 // src/include/swp_stack_trace.h
-#ifndef SWP_STACK_TRACE_H
-#define SWP_STACK_TRACE_H
+#ifndef SWP_STACK_TRACE_H_
+#define SWP_STACK_TRACE_H_
 
 #include <unistd.h>
 
@@ -88,7 +88,7 @@ void print_stacktrace(int fd = STDERR_FILENO) noexcept;
 
 } // namespace swp_stack_trace
 
-#endif // SWP_STACK_TRACE_H
+#endif // SWP_STACK_TRACE_H_
 ```
 
 ### 输出格式

@@ -37,8 +37,8 @@ Files to delete:
 - [ ] **Step 1: Write the public header**
 
 ```cpp
-#ifndef SWP_STACK_TRACE_H
-#define SWP_STACK_TRACE_H
+#ifndef SWP_STACK_TRACE_H_
+#define SWP_STACK_TRACE_H_
 
 #include <unistd.h>
 
@@ -51,7 +51,7 @@ void print_stacktrace(int fd = STDERR_FILENO) noexcept;
 
 } // namespace swp_stack_trace
 
-#endif // SWP_STACK_TRACE_H
+#endif // SWP_STACK_TRACE_H_
 ```
 
 - [ ] **Step 2: Commit**
