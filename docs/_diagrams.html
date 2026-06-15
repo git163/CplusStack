@@ -131,7 +131,7 @@ d3: `flowchart TD
   I-->|yes|G-->D
   I-->|no|J-->D
   D-->|no|H
-  ${cls({entry:defs.entry,step:defs.step,decision:defs.decision,end:defs.end,fallback:defs.fallback})}`,
+  ${cls({entry:defs.entry,step:defs.step,decision:defs.decision,done:defs.done,fallback:defs.fallback})}`,
 
 d4: `flowchart LR
   subgraph SAFE["signal-safe (this library uses)"]
@@ -192,7 +192,7 @@ d6: `flowchart TD
   D-->|Linux|E1-->E2-->G
   D-->|macOS|F1-->F2-->F3-->F4-->G
   G-->H
-  ${cls({entry:defs.entry,tool:defs.tool,step:defs.step,cmd:defs.cmd,end:defs.end})}`,
+  ${cls({entry:defs.entry,tool:defs.tool,step:defs.step,cmd:defs.cmd,done:defs.done})}`,
 };
 
 async function renderAll() {
