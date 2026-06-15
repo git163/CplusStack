@@ -142,9 +142,11 @@ addr2line -e ./your_binary 0x00005555555551a9
 
 ### 单元测试
 
-- 在子进程中安装 `SIGSEGV` / `SIGFPE` handler，调用 `print_stacktrace` 写到 pipe。
-- 父进程读取输出，验证包含预期的 mangled 函数名（如 `crash_demo` 中的测试函数）。
+- 使用 `dup2` 将 `STDERR_FILENO` 重定向到 pipe，捕获 `print_stacktrace` 的输出，验证包含当前测试函数的 mangled 名子串。
+- 在当前进程中安装 `SIGUSR1` handler，handler 内部调用 `print_stacktrace` 写到 pipe，然后返回；验证输出包含当前测试函数名。
 - 验证库不抛异常、不导致测试进程异常退出。
+
+> 注：原计划使用 `fork()` 在子进程中测试，但在 macOS 上 `libunwind` 在 `fork()` 子进程中无法回溯到父函数帧，因此改为在当前进程中使用 `dup2` 和同步信号触发。
 
 ### 集成 / 端到端
 
