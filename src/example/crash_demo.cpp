@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <stdexcept>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 namespace {
@@ -286,6 +287,33 @@ __attribute__((noinline)) void trigger_exec_non_exec() {
 #endif
 }
 
+// 非法系统调用 → SIGSYS
+__attribute__((noinline)) void trigger_sigsys() {
+    // 传入一个不存在的系统调用号，内核返回 SIGSYS
+    ::syscall(99999);
+}
+
+// 主动触发 SIGQUIT（Ctrl+\） → SIGQUIT
+__attribute__((noinline)) void trigger_sigquit() {
+    ::raise(SIGQUIT);
+}
+
+// 向已关闭的 pipe 写入 → SIGPIPE
+__attribute__((noinline)) void trigger_sigpipe() {
+    int fd[2];
+    if (::pipe(fd) != 0) std::abort();
+    ::close(fd[0]);
+    // 写入读端已关闭的 pipe → SIGPIPE
+    (void)::write(fd[1], "x", 1);
+    ::close(fd[1]);
+}
+
+// 定时器超时 → SIGALRM
+__attribute__((noinline)) void trigger_sigalrm() {
+    ::alarm(1);
+    ::pause();  // 等待 SIGALRM 到达
+}
+
 // ---------- 多层调用封装 ----------
 
 // 在 crash_level_3 → crash_level_2 → crash_level_1 层叠下触发目标信号，
@@ -347,6 +375,10 @@ void print_usage(const char* prog) {
     std::cerr << "    terminate          unhandled exception → terminate" << std::endl;
     std::cerr << "    heap_buf_of        heap buffer overflow" << std::endl;
     std::cerr << "    exec_nx            execute non-executable memory" << std::endl;
+    std::cerr << "    sigsys             bad system call" << std::endl;
+    std::cerr << "    sigquit            quit signal (Ctrl+\\)" << std::endl;
+    std::cerr << "    sigpipe            write to broken pipe" << std::endl;
+    std::cerr << "    sigalrm            alarm timeout" << std::endl;
 }
 
 } // namespace
@@ -385,6 +417,10 @@ int main(int argc, char* argv[]) {
             {"terminate",           trigger_terminate_handler,   false},
             {"heap_buf_of",         trigger_heap_buf_overflow,   false},
             {"exec_nx",             trigger_exec_non_exec,       false},
+            {"sigsys",              trigger_sigsys,              false},
+            {"sigquit",             trigger_sigquit,             false},
+            {"sigpipe",             trigger_sigpipe,             false},
+            {"sigalrm",             trigger_sigalrm,             false},
         };
 
         bool found = false;
@@ -411,6 +447,10 @@ int main(int argc, char* argv[]) {
         install_handler(SIGABRT);
         install_handler(SIGBUS);
         install_handler(SIGTRAP);
+        install_handler(SIGSYS);
+        install_handler(SIGQUIT);
+        install_handler(SIGPIPE);
+        install_handler(SIGALRM);
 
         // 配置备用信号栈，仅用于 handler 执行，正常程序不使用。
         if (need_altstack) {
