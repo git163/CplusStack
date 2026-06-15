@@ -15,7 +15,7 @@ fi
 
 if [ "$need_build" = true ]; then
     echo "Building crash_demo..."
-    cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR"
+    cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" -DBUILD_TESTING=OFF
     cmake --build "$BUILD_DIR" --target crash_demo -j
     if [ $? -ne 0 ]; then
         echo "Build failed"
