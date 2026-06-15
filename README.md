@@ -24,6 +24,8 @@ cmake --build build -j
 ## 运行示例
 
 ```bash
+./run.sh
+# 或
 ./build/src/example/crash_demo
 ```
 
@@ -70,12 +72,24 @@ g++ your_app.cpp -lswp_stack_trace -lunwind
 addr2line -e ./your_binary 0x00005555555551a9
 ```
 
+也可以直接通过 `symbolize_stack.py` 自动解析整段堆栈输出：
+
+```bash
+./run.sh 2>&1 | ./symbolize_stack.py ./build/src/example/crash_demo
+```
+
 > 注意：现代 Linux 默认开启 PIE，PC 为虚拟地址。对于 PIE 可执行文件或共享库，离线使用 `addr2line` 时需要结合 `/proc/self/maps` 计算模块内偏移。
 
 ## 测试
 
 ```bash
-ctest --test-dir build --output-on-failure
+./run_tests.sh
+```
+
+或直接运行：
+
+```bash
+ctest --test-dir build --verbose
 ```
 
 ## 注意事项
