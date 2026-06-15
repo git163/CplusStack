@@ -86,17 +86,17 @@
 flowchart TD
     A["CPU 硬件异常<br/>除零 / 缺页 / 非法指令"]:::hw
     B["内核异常处理<br/>trap handler"]:::kernel
-    C["信号生成<br/>force_sig() / send_signal()"]:::kernel
-    D["进程信号队列<br/>task_struct→pending"]:::kernel
+    C["信号生成<br/>force_sig / send_signal"]:::kernel
+    D["进程信号队列<br/>task_struct pending"]:::kernel
     E["返回用户态前<br/>do_signal() 检查 pending"]:::kernel
-    F["调用用户注册的 handler<br/>sigaction→sa_handler"]:::user
+    F["调用用户注册的 handler<br/>sigaction sa_handler"]:::user
     G["swp_stack_trace::<br/>print_stacktrace(fd)"]:::lib
     H["libunwind 展开栈帧"]:::lib
     I["write() 写入 stderr / 文件"]:::lib
     J{"使用方决定后续行动"}:::user
-    K["SIG_DFL + raise(sig)<br/>→ core dump + 终止"]:::exit
-    L["_exit(EXIT_FAILURE)<br/>→ 直接退出，无 core"]:::exit
-    M["返回继续执行<br/>❌不推荐，UB后不安全"]:::danger
+    K["SIG_DFL + raise(sig)<br/>core dump + terminate"]:::exit
+    L["_exit(EXIT_FAILURE)<br/>exit directly, no core"]:::exit
+    M["return from handler<br/>not safe after UB"]:::danger
 
     A --> B --> C --> D --> E --> F --> G --> H --> I
     G -.->|" 库只做这一件事 "| H
@@ -128,11 +128,11 @@ graph TD
     subgraph "进程虚拟地址空间"
       direction BT
       A["栈顶 (低地址)"]:::mem
-      B["trigger_sigsegv 栈帧<br/>局部变量 + 返回地址 → crash_level_1"]:::frame
-      C["crash_level_1 栈帧<br/>局部变量 + 返回地址 → crash_level_2"]:::frame
-      D["crash_level_2 栈帧<br/>局部变量 + 返回地址 → crash_level_3"]:::frame
-      E["crash_level_3 栈帧<br/>局部变量 + 返回地址 → main"]:::frame
-      F["main 栈帧<br/>main() 的局部变量 + 返回地址 → __libc_start_main"]:::frame
+      B["trigger_sigsegv 栈帧<br/>局部变量 + 返回到 crash_level_1"]:::frame
+      C["crash_level_1 栈帧<br/>局部变量 + 返回到 crash_level_2"]:::frame
+      D["crash_level_2 栈帧<br/>局部变量 + 返回到 crash_level_3"]:::frame
+      E["crash_level_3 栈帧<br/>局部变量 + 返回到 main"]:::frame
+      F["main 栈帧<br/>main() 局部变量 + 返回到 libc"]:::frame
       G["栈底 (高地址)"]:::mem
     end
 
@@ -162,22 +162,22 @@ graph TD
   <h2>3. libunwind 工作流程</h2>
   <div class="mermaid">
 flowchart TD
-    A["print_stacktrace(fd)"]:::entry
-    B["1. unw_getcontext(&ctx)<br/>获取当前 CPU 寄存器快照<br/>SP / PC / FP 等"]:::step
-    C["2. unw_init_local(&cursor,&ctx)<br/>用寄存器快照<br/>初始化 unwind cursor"]:::step
-    D["unw_step(cursor) > 0 ?"]:::decision
-    E["3a. unw_get_reg: 读当前帧的 PC"]:::step
-    F["3b. unw_get_proc_name: 读函数名 (mangled)"]:::step
-    G["3c. write: 格式化写入 #N pc name+off"]:::step
-    H["栈顶: 返回"]:::end
-    I{ "name_result == 0?"}:::decision
-    J["write(fd,'???')"]:::fallback
+    A[print_stacktrace fd]:::entry
+    B[Step 1: unw_getcontext<br/>CPU register snapshot]:::step
+    C[Step 2: unw_init_local<br/>initialize unwind cursor]:::step
+    D{more frames?}:::decision
+    E[Step 3a: unw_get_reg<br/>read PC from frame]:::step
+    F[Step 3b: unw_get_proc_name<br/>read mangled function name]:::step
+    G[Step 3c: write<br/>output to fd]:::step
+    H[done - return]:::end
+    I{symbol resolved?}:::decision
+    J[write ??? fallback]:::fallback
 
     A --> B --> C --> D
-    D -->|" 是: 还有上一帧 "| E --> F --> I
-    I -->|" 是 "| G --> D
-    I -->|" 否: 符号解析失败 "| J --> D
-    D -->|" 否: 到达栈顶 "| H
+    D -->|yes| E --> F --> I
+    I -->|yes| G --> D
+    I -->|no| J --> D
+    D -->|no| H
 
     classDef entry fill:#7aa2f7,stroke:#4a6ab8,color:#1a1b26
     classDef step fill:#9ece6a,stroke:#5a823c,color:#1a1b26
@@ -271,7 +271,7 @@ flowchart TD
 
     subgraph Parse["步骤 1: 解析输入"]
       C["正则提取 PC 地址<br/>(0x... 格式)"]:::step
-      D["识别平台<br/>Linux → addr2line<br/>macOS → atos"]:::step
+      D["识别平台<br/>Linux - addr2line<br/>macOS - atos"]:::step
     end
 
     subgraph Linux["Linux: addr2line"]
