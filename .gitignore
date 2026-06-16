@@ -34,3 +34,8 @@ coverage/
 
 # CMake/CTest temporary files
 Testing/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo

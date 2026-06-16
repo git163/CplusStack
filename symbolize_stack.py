@@ -15,8 +15,9 @@
 默认值可在脚本底部 DEFAULT_BINARY 和 DEFAULT_LOG 修改。
 
 说明：
-- Linux：调用 addr2line / llvm-addr2line 将 PC 翻译成 file:line。
-- macOS：调用 atos；自动根据堆栈中的符号地址和 nm/otool 计算 ASLR slide。
+- Linux：调用 addr2line / llvm-addr2line（带 -f）将 PC 翻译成函数名 + file:line。
+- macOS：调用 atos（自动 demangle）同时获取函数名与 file:line；
+  根据堆栈中的符号地址和 nm/otool 计算 ASLR slide。
 """
 
 import platform
@@ -69,10 +70,28 @@ def parse_input(lines):
     return entries, pcs
 
 
+def _parse_addr2line_pairs(stdout, pc_count):
+    """
+    解析 addr2line -f 的输出：每 2 行对应一个 PC，第一行是函数名（已 demangle），
+    第二行是 file:line。返回与 pc_count 等长的 (func, loc) 元组列表，
+    不足时用 ("??", "??:0") 兜底。
+    """
+    lines = [ln.strip() for ln in stdout.strip().split("\n") if ln.strip()]
+    pairs = []
+    # 每 2 行一组：(func, loc)
+    for i in range(0, len(lines), 2):
+        func = lines[i] if i < len(lines) else "??"
+        loc = lines[i + 1] if i + 1 < len(lines) else "??:0"
+        pairs.append((func, loc))
+    while len(pairs) < pc_count:
+        pairs.append(("??", "??:0"))
+    return pairs[:pc_count]
+
+
 def symbolize_addr2line(binary, tool_path, pcs, entries):
-    """使用 addr2line 解析。"""
+    """使用 addr2line -f 解析（同时获取函数名与 file:line）。"""
     result = subprocess.run(
-        [tool_path, "-e", binary] + pcs,
+        [tool_path, "-e", binary, "-f"] + pcs,
         capture_output=True,
         text=True,
     )
@@ -80,8 +99,8 @@ def symbolize_addr2line(binary, tool_path, pcs, entries):
         print(f"addr2line failed: {result.stderr}", file=sys.stderr)
         return [line.rstrip() for line, _, _, _ in entries]
 
-    locations = [loc.strip() for loc in result.stdout.strip().split("\n")]
-    return combine(entries, locations)
+    pairs = _parse_addr2line_pairs(result.stdout, len(pcs))
+    return combine(entries, pairs)
 
 
 def normalize_symbol(symbol):
@@ -170,6 +189,30 @@ def compute_macos_load_base(binary, entries):
     return None
 
 
+def _parse_atos_line(line):
+    """
+    解析 atos 单行输出，格式：<demangled_func> (in <bin>) (<file>:<line>)
+    返回 (func, file:line)；解析失败时返回 ("??", "??:0")。
+
+    注意：demangled 函数名本身可能以 "(" 开头（如 "(anonymous namespace)::foo"），
+    因此不能简单用首个 "(" 切分。改为按 " (in " 边界切函数名。
+    """
+    # 取末尾 (file:line)
+    m = re.search(r"\(([^()]+:\d+)\)\s*$", line)
+    loc = m.group(1) if m else "??:0"
+    # 函数名 = 第一个 " (in " 之前的内容
+    boundary = line.find(" (in ")
+    if boundary >= 0:
+        func = line[:boundary].strip()
+    else:
+        # 没有 " (in " 段（atos 无法解析）——尝试找首个 " ("
+        idx = line.find(" (")
+        func = line[:idx].strip() if idx >= 0 else ""
+    if not func:
+        func = "??"
+    return (func, loc)
+
+
 def symbolize_atos(binary, tool_path, entries, pcs):
     """使用 atos 解析（macOS）。自动计算 load base。"""
     load_base = compute_macos_load_base(binary, entries)
@@ -192,21 +235,20 @@ def symbolize_atos(binary, tool_path, entries, pcs):
 
     # atos 输出示例：
     # (anonymous namespace)::deep_call_1() (in crash_demo) (crash_demo.cpp:99)
-    # 提取最后的 (file:line) 部分
-    raw_locations = [loc.strip() for loc in result.stdout.strip().split("\n")]
-    locations = []
-    for loc in raw_locations:
-        m = re.search(r"\(([^()]+:\d+)\)\s*$", loc)
-        if m:
-            locations.append(m.group(1))
-        else:
-            locations.append("??:0")
+    # 同时提取函数名（首个 ( 之前）与末尾 (file:line)
+    raw_lines = [ln.strip() for ln in result.stdout.strip().split("\n")]
+    pairs = [_parse_atos_line(ln) for ln in raw_lines]
 
-    return combine(entries, locations)
+    return combine(entries, pairs)
 
 
-def combine(entries, locations):
-    """将解析结果和原始行合并。"""
+def combine(entries, pairs):
+    """
+    将解析结果与原始行合并。pairs 是 (func, file:line) 元组列表：
+      - func 来自 addr2line -f 或 atos 的 demangle 输出
+      - file:line 来自同一调用的 loc 部分
+    输出格式：#N  PC  <demangled_func>+0x<offset>  at <file>:<line>
+    """
     output = []
     loc_idx = 0
     for line, prefix, pc, suffix in entries:
@@ -214,13 +256,29 @@ def combine(entries, locations):
             output.append(line.rstrip())
             continue
 
-        loc = locations[loc_idx] if loc_idx < len(locations) else "??:0"
+        # 从原行提取 libunwind 给出的 offset（如 "+0x28"）
+        m = FUNC_OFFSET_RE.search(suffix)
+        offset_hex = m.group(2) if m else None
+
+        # 取本帧的 (func, loc)
+        func, loc = ("??", "??:0")
+        if loc_idx < len(pairs):
+            func, loc = pairs[loc_idx]
         loc_idx += 1
 
-        if loc in ("??:0", "??:?", ""):
-            output.append(line.rstrip())
+        # 函数名兜底：addr2line/atos 无法解析时显示 ???
+        display_func = func if func not in ("??", "", None) else "???"
+
+        # 拼装函数名+offset 段（无 offset 时省略 +0x...）
+        if offset_hex is not None:
+            func_segment = f"{display_func}+0x{offset_hex}"
         else:
-            output.append(f"{line.rstrip()}  at {loc}")
+            func_segment = display_func
+
+        new_line = f"{prefix}{pc}  {func_segment}"
+        if loc not in ("??:0", "??:?", ""):
+            new_line += f"  at {loc}"
+        output.append(new_line)
 
     return output
 
