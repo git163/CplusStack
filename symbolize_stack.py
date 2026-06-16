@@ -266,8 +266,15 @@ def combine(entries, pairs):
             func, loc = pairs[loc_idx]
         loc_idx += 1
 
-        # 函数名兜底：addr2line/atos 无法解析时显示 ???
-        display_func = func if func not in ("??", "", None) else "???"
+        # 函数名兜底：
+        #   1. addr2line/atos 解析成功 → 用 demangled 名
+        #   2. 解析失败（返回 "??"）→ 回退到原始 mangled 名（来自 libunwind）
+        #   3. 原始也没有（libunwind 也拿不到，如完全空帧）→ 显示 ???
+        if func not in ("??", "", None):
+            display_func = func
+        else:
+            m_orig = FUNC_OFFSET_RE.search(suffix)
+            display_func = m_orig.group(1) if m_orig else "???"
 
         # 拼装函数名+offset 段（无 offset 时省略 +0x...）
         if offset_hex is not None:
