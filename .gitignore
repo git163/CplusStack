@@ -7,7 +7,7 @@ Thumbs.db
 .idea/
 *.swp
 *~
-
+*.pyc
 # Build
 build/
 build-*/
